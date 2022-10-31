@@ -127,10 +127,6 @@ def None_to_nan(value):
 
 debug_level = 0  # 0 is off, 1 is basic higher numbers show more, 10 is verbose
 
-track_color = "red"
-track_weight = 3.5
-track_opacity = 0.4
-
 Overall_min_latitude = None
 Overall_max_latitude = None
 Overall_min_longitude = None
