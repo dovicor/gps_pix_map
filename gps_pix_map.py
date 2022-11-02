@@ -43,8 +43,8 @@ def update_DataFrame(original_df, updater_df):
     updater_df is used instead. So if both DFs have a cell at the same row/index and column, but the values differ, then
     the value from updater_df is used. Any new rows or new columns from updater will also be added to the original_df.
     """
-    # I tried many variations of doing this directly with the dataframes - using merge(), merge_ordered(), update(),
-    # join(), concat() but couldn't find any way to get what I wanted (which seems relatively simple).
+    # TODO: I tried many variations of doing this directly with the dataframes - using merge(), merge_ordered()
+    #  update(), join(), concat() but couldn't find any way to get what I wanted (which seems relatively simple).
     # Be aware this has not been thoroughly tested.
 
     dict1 = original_df.to_dict(orient="index")
@@ -64,15 +64,18 @@ def update_DataFrame(original_df, updater_df):
 # I had much more problems dealing with times and dates than I expected. Here's a summary of some of the difficulties
 # and where things are now...
 # 1) I needed to compare times/dates from different sources (the GPS device and the EXIF in images), therefore all my
-#       times/dates needed to be "timezone aware" (rather than "timezone naive" - google this if not familiar).
+#       times/dates needed to be "timezone aware" (rather than "timezone naive" - please google this if not familiar).
 # 2) The times/dates returned from my GPS device via gpxpy were in UTC but without the timezone set (and therefore
 #       timezone-naive).
-# 3) To allow comparisons, python seemed to required that times/dates be in the same timezone (which seems overly
+# 3) To allow comparisons, python seemed to require that times/dates be in the same timezone (to me this seems overly
 #       restrictive). So I intend to have all times/dates internally in UTC and convert to/from as needed (such as for
 #       display - in which case the local timezone is generally preferred).
 # 4) I still don't think I have it figured out how to deal appropriately with the local timezone - i.e. to determine
-#       what it is in a robust manner.
-# 5) Getting the date/time from EXIF of when an image was taken was more difficult than expected since various fields
+#       what it is in a robust manner. Note that the 'local' timezone concept is ambiguous in a program that deals with
+#       travelling (possibly across timezone boundaries) and time (this program may be running in a different timezone -
+#       or with a different savings/standard time then when the images were captured - i.e. different images handled
+#       by this program may have been captured in different timezones or with different savings/standard time).
+# 5) Extracting the date/time from EXIF of when an image was taken was more difficult than expected since various fields
 #       might or might not be present; see get_exposure_datetime_from_EXIF() - still a work-in-progress.
 
 class TzHelper:
@@ -93,10 +96,14 @@ class TzHelper:
 
 class SimpleHierProfiler:
     """Prints execution times between call points.
-    About as simple as can get to measure runtime at various locations.
+    Not as simple as originally intended - based on my C++ thinking about the reliability of destructors being called,
+    not yet knowing the Pythons rules are much less rigorous. Oh well. I added some tweaks (and sloppiness) but I still
+    find this output very helpful both in testing/debugging this code as well as when dealing with different usage
+    models.
+    Supports nesting - i.e. if the main/root execution sequence and functions and nested functions.
     """
-    level_start = []
-    level_name = []
+    level_start = [] # index is by nesting level
+    level_name = [] # ditto
 
     def __init__(self, the_level_name: str):
         self.i_am_alive = True
@@ -107,20 +114,22 @@ class SimpleHierProfiler:
         self.format_output(self.interval_start, "Start ")
 
     def __del__(self):
-        """Yuck - see comments for end()
-        """
+        # Yuck - see comments for end() - but still seems to be reliably called at the end of a function.
         if not self.i_am_alive:
-            #print("Object already end()'d in __del__()")
+            #print("Taking not i_am_alive early exit in SimpleHierProfiler.__del__()")
             return
         self.end()
 
     def end(self):
         """Sort-of like a destructor - I've got a C++ mindset and wanted something to get called when an object
-        'goes out of scope'. Python is different from C++ and the objects don't go out-of-scope at the end of a function
+        'goes out of scope'. Python is different from C++ and the objects don't go out-of-scope at the end of a 'code
+        block' (for example - a variable defined in C++ in an if-statement's block goes out-of-scope and is destructed
+        at the end of that if-statement's block. Python is different - the call to __del__ is more tied to the garbage
+        collector).
         so I need to explicitly call this.
         """
         if not self.i_am_alive:
-            #print("Object already end()'d in end()")
+            #print("Taking not i_am_alive early exit in SimpleHierProfiler.end()")
             return
 
         now_time = SimpleHierProfiler.get_time()
@@ -133,10 +142,7 @@ class SimpleHierProfiler:
         message_to_use = message if message is not None else SimpleHierProfiler.level_name[self.nesting_level]
         print("{:10.6f} {}{:10.6f}: {}{}".format(now_time - SimpleHierProfiler.level_start[0],
                                              ' ' * (self.nesting_level - 1) * 11,
-                                                 #now_time - SimpleHierProfiler.level_start[self.nesting_level],
-                                                 now_time - self.interval_start,
-                                                 pre_message,
-                                                 message_to_use))
+                                             now_time - self.interval_start, pre_message, message_to_use))
 
     @classmethod
     def get_time(cls) -> float:
@@ -161,14 +167,11 @@ the_profiler = SimpleHierProfiler("Main Program")
 EARTH_CIRCUMFERENCE_FEET = 24902 * 5280
 EARTH_FEET_PER_DEGREE = EARTH_CIRCUMFERENCE_FEET / 360
 
-
 def degrees_to_feet(degrees: float) -> float:
     return degrees * EARTH_FEET_PER_DEGREE
 
-
 def feet_to_degrees(feet: float) -> float:
     return feet / EARTH_FEET_PER_DEGREE
-
 
 def None_to_nan(value):
     return value if (value != None) else np.nan
@@ -188,6 +191,9 @@ def OverallBBoxCheck(latitude: float, longitude: float):
     if (Overall_max_latitude is None) or (latitude > Overall_max_latitude):  Overall_max_latitude = latitude
     if (Overall_min_longitude is None) or (longitude < Overall_min_longitude): Overall_min_longitude = longitude
     if (Overall_max_longitude is None) or (longitude > Overall_max_longitude): Overall_max_longitude = longitude
+def OverallBBoxCheck_GPX( gpxbounds ):
+    OverallBBoxCheck( gpxbounds.min_latitude, gpxbounds.min_longitude)
+    OverallBBoxCheck( gpxbounds.max_latitude, gpxbounds.max_longitude)
 
 
 def CreateBBox(inlist):
@@ -374,7 +380,7 @@ def get_EXIF_from_directory(pathname: Path, href_str: str, file_suffix: str = '*
         str_f = str(f)
         file_count += 1
         if debug:
-            print("In read_geotagged_photos_from_dir(folder={},...): file #{}: {}".format(directory, file_count, f))
+            print("In read_geotagged_photos_from_dir(folder={},...): file #{}: {}".format(pathname, file_count, f))
         exif_dict = read_exif_data(f, exif_fields, debug=debug)
         latitude  = GPS_DMS_to_degrees(exif_dict.get("gps_latitude", None), exif_dict.get("gps_latitude_ref", None))
         longitude = GPS_DMS_to_degrees(exif_dict.get("gps_longitude", None), exif_dict.get("gps_longitude_ref", None))
@@ -856,6 +862,7 @@ def meters_to_US(meters):
 
 def create_track_popup(gpx_track_segment, end_to_end_length_meters, name):
     length_2d_meters = gpx_track_segment.length_2d()
+    length_3d_meters = gpx_track_segment.length_3d()
     uphill_meters, downhill_meters = gpx_track_segment.get_uphill_downhill()
     start_time, end_time = gpx_track_segment.get_time_bounds()
     min_elevation, max_elevation = gpx_track_segment.get_elevation_extremes()
@@ -868,28 +875,45 @@ def create_track_popup(gpx_track_segment, end_to_end_length_meters, name):
                  "<tr><th>Duration</th><td>{}</td></tr>\n"
                  "<tr><th>Elevation Range</th><td>{}'..{}'</td></tr>\n"
                  "<tr><th>Uphill</th><td>{:.0f}'</td></tr>\n"
+                 "<tr><th>Extra 3D length</th><td>{}'</td></tr>\n"
                  "<tr><th>Date</th><td>{}</td></tr>\n"
                  "</table>\n".format(
         name, meters_to_US(length_2d_meters), trip_type, duration_cleaned, round(meters_to_feet(min_elevation)),
         round(meters_to_feet(max_elevation)),
-        meters_to_feet(uphill_meters), start_time.strftime("%d-%b-%Y")))
+        round(meters_to_feet(uphill_meters)), round(meters_to_feet(length_3d_meters-length_2d_meters)), start_time.strftime("%d-%b-%Y")))
     return popup_str
 
-def calc_end_to_end_length(path):
+def distance_start_and_end(path):
+    # The distance between the two endpoints - so NOT the length of the path.
     return gpxpy.geo.distance( path[0][0], path[0][1], None, path[-1][0], path[-1][1], None )
 
+def args_to_poly(the_command_line_arg, the_func):
+    if the_command_line_arg is not None:
+        for stuff in the_command_line_arg:
+            filename = stuff[0]
+            name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else os.path.basename(filename)
+            the_args = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
+            popup = stuff[3] if (len(stuff) >= 4) else None
+            feature_group = folium.FeatureGroup(name, overlay=True)
+            list_of_tracks, first_time = read_gpx_file(filename, profile=args.profile)
+            the_args_dict = string_to_dict(the_args)
+            for track_pair in list_of_tracks:
+                the_func(track_pair[1],
+                         **the_args_dict,
+                         tooltip=name,
+                         popup=popup).add_to(feature_group)
+            feature_group.add_to(folium_map)
 
 
-######################################################################################################################################
-######################################################################################################################################
-######################################################################################################################################
-######################################################################################################################################
-######################################################################################################################################
-######################################################################################################################################
-######################################################################################################################################
-######################################################################################################################################
-######################################################################################################################################
-######################################################################################################################################
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
 
 if __name__ == "__main__":
 
@@ -1011,55 +1035,68 @@ if __name__ == "__main__":
                             help="Name of file to be created with the generated HTML.")
 
     arg_parser.add_argument("-tracks", "--tracks",
-                            help="location of the GPX file(s) identify hiking tracks (path hiked): <file-or-directory> [<args-see-descr>']",
+                            help="location of the GPX file(s) identify hiking tracks (path hiked):"
+                                 " <file-or-directory> [<args-see-descr>']",
                             nargs="+", action="append", type=str)
 
     arg_parser.add_argument("-photosdir", "--photosdir", type=str, action="append",
-                            help="Directory to scan for image files: <directory-name> <href-such-as-url> [<args-see-descr>]",
+                            help="Directory to scan for image files: <directory-name>"
+                                 " <href-such-as-url> [<args-see-descr>]",
                             nargs="+", default=None)
 
     arg_parser.add_argument("-pm_group", "--pm_group", type=float,
-                            help="Photo-marker grouping resolution in feet. Creates a grid of given resolution - groups images at same grid box,",
+                            help="Photo-marker grouping resolution in feet. Creates a grid of given resolution - groups"
+                                    " images at same grid box,",
                             default=150)
 
     arg_parser.add_argument("-fixed", "--fixed", type=str,
-                            help="Show a fixed path on the map. Positional arguments are: <gpx-filename> [<label> [<args-see-descr> [<popup-text>]]]",
+                            help="Show a fixed path on the map. Positional arguments are: <gpx-filename> [<label>"
+                                 " [<args-see-descr> [<popup-text>]]]",
                             nargs="+", action='append')
 
     arg_parser.add_argument("-polygon", "--polygon", type=str,
-                            help="Draw a polygon - perimeter. To outline a region/boundary. Positional arguments are: <gpx-filename> [<label> [<args-see-descr> [<popup-text>]]]]",
+                            help="Draw a polygon - perimeter. To outline a region/boundary. Positional arguments are:"
+                                 " <gpx-filename> [<label> [<args-see-descr> [<popup-text>]]]]",
                             nargs="+", action='append')
 
     arg_parser.add_argument("-lifts", "--lifts", type=str,
-                            help="CSV file identifying GPS coordinates of lower and upper terminals of ski-lifts. CSV headers should be: Lift,LowerTermLat,LowerTermLon,UpperTermLat,UpperTermLon. Positional command-line arguments are <csv-filename> [args-see-descr>]",
+                            help="CSV file identifying GPS coordinates of lower and upper terminals of ski-lifts. CSV"
+                                " headers should be: Lift,LowerTermLat,LowerTermLon,UpperTermLat,UpperTermLon."
+                                " Positional command-line arguments are <csv-filename> [args-see-descr>]",
                             nargs="+", action='append')
 
     arg_parser.add_argument("-include", "--include", type=float,
-                            help="Define a region which each GPS point must be in to be included - for photos and tracks."
-                                 " Three decimal (floating point) values as: <latitude> <longitude> <edge-length-miles>"
-                                 " Such that <latitude> and <longitude> identify the center point of a rectange - and <edge-length> indicates that length of each edge"
+                            help="Define a region which each GPS point must be in to be included - for photos and"
+                                " tracks. Three decimal (floating point) values as: <latitude> <longitude>"
+                                 " <edge-length-miles> Such that <latitude> and <longitude> identify the center point"
+                                " of a rectangle - and <edge-length> indicates that length of each edge"
                                  " Default is to include all points",
                             nargs=3, action="append", default=None)
 
     arg_parser.add_argument("-exclude", "--exclude", type=float,
                             help="Define a region which each GPS will be discarded for photos and tracks."
-                                 " Similar to --include: Three decimal (floating point) values as: <latitude> <longitude> <edge-length-miles>"
-                                 " Note - --exclude has priority over --include: points in both an --include and an --exclude region will be excluded."
+                                 " Similar to --include: Three decimal (floating point) values as: <latitude>"
+                                 " <longitude> <edge-length-miles>"
+                                 " Note - --exclude has priority over --include: points in both an --include and an"
+                                 " --exclude region will be excluded."
                                  " Default is to exclude no points",
                             nargs='+', action="append", default=None)
 
     arg_parser.add_argument("-showbbox", "--showbbox", type=int, action="store", nargs='?', const=1,
-                            help="Show the bounding-boxes of --include and --exclude. 0=disable, 1=enable, 2=available on layers menu",
+                            help="Show the bounding-boxes of --include and --exclude. 0=disable, 1=enable, 2=available"
+                                " on layers menu",
                             default=0)
     arg_parser.add_argument("-showrejections", "--showrejections", type=int, action="store", nargs='?', const=1,
                             help="Show the points rejected due to bounding-boxes.", default=0)
     arg_parser.add_argument("-correctgps", "--correctgps", type=int, action="store", nargs='?', const=1,
-                            help="Attempt to correct 'bad' GPS coordinates in JPEG files using date/time of tracking (GPX) files. 0=disable, 1=enable, 2=show changes",
+                            help="Attempt to correct 'bad' GPS coordinates in JPEG files using date/time of tracking"
+                                " (GPX) files. 0=disable, 1=enable, 2=show changes",
                             default=0)
     arg_parser.add_argument("-cachecorrections", "--cachecorrections", type=str, action="store", nargs='?',
                             help="CSV file save/reload corrections from -correctgps.")
     arg_parser.add_argument("-checkbox_how", "--checkbox_how", type=str, action="store", default="day",
-                            help="granularity of the dates in the checkbox menu: should be one of 'year', 'month', 'week', 'day', or 'hour'")
+                            help="granularity of the dates in the checkbox menu: should be one of 'year', 'month',"
+                                 " 'week', 'day', or 'hour'")
 
     args = arg_parser.parse_args()
     if args.debug >= 1:
@@ -1087,103 +1124,66 @@ if __name__ == "__main__":
     DateTimeCheckboxMgr.set_how(args.checkbox_how)
     round_resolution_degrees = feet_to_degrees(args.pm_group)
 
+
     folium_map = folium.Map(tiles="OpenStreetMap", control_scale=False)
     # folium.TileLayer('OpenStreetMap', attr="Open Street Map", name="Open Street Map").add_to(folium_map)
     folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}',
-                     attr="Tiles &copy; Esri &mdash; National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC",
+                     attr="Tiles &copy; Esri &mdash; National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA,"
+                            " ESA, METI, NRCAN, GEBCO, NOAA, iPC",
                      name='Nat Geo Map').add_to(folium_map)
 
     folium.TileLayer('http://tile.stamen.com/terrain/{z}/{x}/{y}.jpg', attr="terrain-bcg",
                      name='Stamen Terrain Map').add_to(folium_map)
     folium.TileLayer('Stamen Toner', attr="Stamen Toner", name="Stamen Toner").add_to(folium_map)
     folium.TileLayer('Stamen Watercolor', attr="Stamen Watercolor", name="Stamen Watercolor").add_to(folium_map)
-
     the_profiler.profile("Program startup, argument processing and other initialization")
 
     # The following are both lists of bounding boxes - each list entry is a tuple with 4 points - the GPS coordinates
     # of SW and NE i.e. (min lat, min lon, max lat, max lon)
     include_boxes = []
+    if args.include is not None:
+        for include_info in args.include:
+            include_boxes.append( CreateBBox(include_info) )
     exclude_boxes = []
-    if (args.include is not None) or (args.exclude is not None):
-        if args.include is not None:
-            for include_info in args.include:
-                bbox = CreateBBox(include_info)
-                include_boxes.append(bbox)
-        if args.debug >= 3: print("include_boxes={}".format(include_boxes))
-        if args.exclude is not None:
-            for exclude_info in args.exclude:
-                bbox = CreateBBox(exclude_info)
-                exclude_boxes.append(bbox)
-        if args.debug >= 3: print("exclude_boxes={}".format(exclude_boxes))
+    if args.exclude is not None:
+        for exclude_info in args.exclude:
+            exclude_boxes.append( CreateBBox(exclude_info) )
     the_profiler.profile("Decode the include/exclude boxes")
 
-
-    if args.polygon is not None:
-        for stuff in args.polygon:
-            filename = stuff[0]
-            name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else os.path.basename(filename)
-            the_args_string = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
-            popup = stuff[3] if (len(stuff) >= 4) else None
-            feature_group = folium.FeatureGroup(name, overlay=True)
-            list_of_tracks, first_time = read_gpx_file(filename, include_datetime=False, profile=args.profile)
-            the_args_dict = string_to_dict(the_args_string)
-            for track_pair in list_of_tracks:
-                folium.Polygon(track_pair[1],
-                               **the_args_dict,
-                               tooltip=name,
-                               popup=popup).add_to(feature_group)
-            feature_group.add_to(folium_map)
+    args_to_poly(args.polygon, folium.Polygon)
     the_profiler.profile("Polygons")
+
 
     if args.lifts is not None:
         for stuff in args.lifts:
             filename = stuff[0]
             the_name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else "lifts"
             the_args = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
-
             if os.path.isfile(filename):
                 try:
                     lifts_df = pd.read_csv(filename)
-                except IOError as e:
-                    print("ERROR: error while attempting to read {}: {}".format(filename, e))
+                except IOError as ee:
+                    print("ERROR: error while attempting to read {}: {}".format(filename, ee))
                     exit(1)
             else:
                 print("ERROR: File not found: {}".format(filename))
                 exit(1)
-
             lifts = LiftHelper(the_name, the_args)
-            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon) for
-             liftname, lower_lat, lower_lon, upper_lat, upper_lon in zip(
+            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon) \
+             for liftname, lower_lat, lower_lon, upper_lat, upper_lon in zip(
                 lifts_df['Lift'], lifts_df['LowerTermLat'], lifts_df['LowerTermLon'], lifts_df['UpperTermLat'],
-                lifts_df['UpperTermLon'])]
-
+                lifts_df['UpperTermLon'])
+             ]
     the_profiler.profile("Lifts")
 
-    if args.debug >= 2: print("Before dealing with Fixed Routes")
-    # Deal with the pre-defined Fixed Routes
-    if args.fixed is not None:
-        for stuff in args.fixed:
-            filename = stuff[0]
-            name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else os.path.basename(filename)
-            the_args = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
-            popup = stuff[3] if (len(stuff) >= 4) else None
-            feature_group = folium.FeatureGroup(name, overlay=True)
-            list_of_tracks, first_time = read_gpx_file(filename, profile=args.profile)
-            the_args_dict = string_to_dict(the_args)
-            for track_pair in list_of_tracks:
-                folium.PolyLine(track_pair[1],
-                                **the_args_dict,
-                                tooltip=name,
-                                popup=popup).add_to(feature_group)
-            feature_group.add_to(folium_map)
+
+    args_to_poly(args.fixed, folium.PolyLine)
     the_profiler.profile("Fixed Routes")
 
     photo_group = folium.FeatureGroup("Photographs", control=True, show=True)
     folium_map.add_child(photo_group)
 
-    # Read EXIF data - create a DataFrame
-    # DVO HELP - should support reading from mulitple directories - i.e. accumulating in the exif_dict - the following
-    # code has a loop - but only the last iteration is used (i.e. that's a bug)
+
     if (args.photosdir is not None) and (len(args.photosdir) >= 1):
         nested_profiler = SimpleHierProfiler("Scanning EXIF data from photos")
         jpeg_df = pd.DataFrame()
@@ -1193,11 +1193,9 @@ if __name__ == "__main__":
             the_photos_args_string = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[1] is not None) else ""
             the_photos_args_dict = string_to_dict(the_photos_args_string)
 
-            coord_df = get_EXIF_from_directory(directory_name, the_photos_href,
-                                               args_dict=the_photos_args_dict, debug=False)
+            exif_df = get_EXIF_from_directory(directory_name, the_photos_href, args_dict=the_photos_args_dict)
 
-            # create dataframe from extracted jpeg/EXIF data
-            jpeg_df = pd.concat([jpeg_df, coord_df])
+            jpeg_df = pd.concat([jpeg_df, exif_df])
             nested_profiler.profile("Read EXIF data from directory ({}) and created DataFrame".format(directory_name))
         jpeg_df.set_index('filename', inplace=True, drop=False)
         nested_profiler.end()
@@ -1217,7 +1215,7 @@ if __name__ == "__main__":
                 lambda value: round(value / round_resolution_degrees) * round_resolution_degrees if (
                         (value is not None) and not math.isnan(value)) else None)
             # Weird - the above can leave some nan values in the "lat_round" and "lon_round" columns - I tried to debug
-            # but didn't make progress. Want to handle here rather than downstream.
+            # but didn't make progress. Wanted to handle here rather than downstream.
             # jpeg_df['lat_round'].replace( { np.nan : None }, inplace=True) # This also doesn't work for me
         if "longitude" in jpeg_df:
             jpeg_df.loc[:, 'lon_round'] = jpeg_df['longitude'].apply(
@@ -1237,7 +1235,7 @@ if __name__ == "__main__":
 
     the_profiler.profile("Grouped by latitude and longitude")
 
-    for stuff in args.tracks:  # DVO TODO - restructure so that args.tracks can be a list of files and/or of directories (now assumes directories)
+    for stuff in args.tracks:
         pathname = stuff[0] if (len(stuff) >= 1) and (stuff[0] is not None) else ""
         feature_name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else ""
         the_args_string = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
@@ -1262,7 +1260,7 @@ if __name__ == "__main__":
                 formatted_timestamp = DateTimeCheckboxMgr.submit_checkbox_datetime(first_time)
 
                 for track_tuple in list_of_tracks:
-                    end_to_end_length = calc_end_to_end_length(track_tuple[1])
+                    end_to_end_length = distance_start_and_end(track_tuple[1])
                     adjusted_list_of_points = remove_excluded_points(track_tuple[1], exclude_boxes, args.showrejections >= 1)
                     polyline = folium.PolyLine(adjusted_list_of_points,
                                                **the_args_dict,
@@ -1275,6 +1273,7 @@ if __name__ == "__main__":
                                                # There's another near-identical kluge elsewhere in this file.
                                                popup=create_track_popup(track_tuple[2], end_to_end_length, the_label)
                                                )
+                    OverallBBoxCheck_GPX( track_tuple[2].get_bounds() )
                     polyline.add_to(tracking_group)
         tracking_group.add_to(folium_map)
         profiler.end()
@@ -1283,7 +1282,6 @@ if __name__ == "__main__":
     if (args.showbbox > 0) and ((args.include is not None) or (args.exclude is not None)):
         bbox_group = folium.FeatureGroup("Bounding Boxes", control=True, show=(args.showbbox == 1))
         bbox_group.add_to(folium_map)
-        folium_map.add_child(bbox_group)
         for bbox in include_boxes:
             the_rectangle = folium.Rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])], color="green")
             the_rectangle.add_to(bbox_group)
@@ -1372,18 +1370,6 @@ if __name__ == "__main__":
                 }}
                 form = document.getElementById('date_menu_form_id');
                 Array.from(form.elements).forEach(element => {{
-                    if (0) {{
-                        console.log('line 867: element=', element);
-                        console.log('line 868:     name=', element.name );
-                        console.log('line 869:     type=', element.type );
-                        console.log('line 870:     value=', element.value );
-                        console.log('line 871:     checked=', element.checked );
-                        console.log('line 872:     tag=', element.tag );
-                        console.log('line 873:     text=', element.text );
-                        console.log('line 874:     id=', element.id );
-                        console.log('line 875:     innerText=', element.innerText );
-                        console.log('line 876:     innerHTML=', element.innerHTML );
-                    }}
                     if (element.type === "checkbox") {{
                         SetAllElementsInCssClass(element.name, "visibility", visibility_value );
                         element.checked = checked_value;
@@ -1432,8 +1418,9 @@ if __name__ == "__main__":
     folium.folium._default_css.append(('leaflet_overloaded_css', 'http://kokanee.mynetgear.com/dvo/hiking_map.css'))
     the_profiler.profile("Transferred HTML/CSS/Javascript code")
 
-    for outfile in args.outfile:  # I don't understand: the 2nd output file (if any) may have added a call to remove() the feature-group for the bounding boxes. But the
-        # observable effect is that the HTML map starts without any background map selected.
+    for outfile in args.outfile:  # I don't understand: the 2nd output file (if any) may have added a call to remove()
+                                    # # the feature-group for the bounding boxes. But th observable effect is that the
+                                    # HTML map starts without any background map selected.
         print("Saving {}".format(outfile))
         folium_map.save(outfile)
     the_profiler.profile("Saved files: {}".format( args.outfile))
