@@ -91,7 +91,7 @@ class TzHelper:
     def as_local(cls, datetime_arg : datetime):
         return datetime_arg.astimezone(TzHelper.local_tz)
 
-class SimpleHierarchicalProfiler:
+class SimpleHierProfiler:
     """Prints execution times between call points.
     About as simple as can get to measure runtime at various locations.
     """
@@ -100,10 +100,10 @@ class SimpleHierarchicalProfiler:
 
     def __init__(self, the_level_name: str):
         self.i_am_alive = True
-        self.nesting_level = len(SimpleHierarchicalProfiler.level_start)
-        self.interval_start = SimpleHierarchicalProfiler.get_time()
-        SimpleHierarchicalProfiler.level_start.append(self.interval_start)
-        SimpleHierarchicalProfiler.level_name.append(the_level_name)
+        self.nesting_level = len(SimpleHierProfiler.level_start)
+        self.interval_start = SimpleHierProfiler.get_time()
+        SimpleHierProfiler.level_start.append(self.interval_start)
+        SimpleHierProfiler.level_name.append(the_level_name)
         self.format_output(self.interval_start, "Start ")
 
     def __del__(self):
@@ -123,20 +123,20 @@ class SimpleHierarchicalProfiler:
             #print("Object already end()'d in end()")
             return
 
-        now_time = SimpleHierarchicalProfiler.get_time()
+        now_time = SimpleHierProfiler.get_time()
         self.format_output(now_time, "Endof ")
-        SimpleHierarchicalProfiler.level_start.pop()
-        SimpleHierarchicalProfiler.level_name.pop()
+        SimpleHierProfiler.level_start.pop()
+        SimpleHierProfiler.level_name.pop()
         self.i_am_alive = False
 
     def format_output(self, now_time, pre_message="", message=None):
-        message_to_use = message if message is not None else SimpleHierarchicalProfiler.level_name[self.nesting_level]
-        print("{:10.6f} {}{:10.6f}: {}{}".format(now_time - SimpleHierarchicalProfiler.level_start[0],
+        message_to_use = message if message is not None else SimpleHierProfiler.level_name[self.nesting_level]
+        print("{:10.6f} {}{:10.6f}: {}{}".format(now_time - SimpleHierProfiler.level_start[0],
                                              ' ' * (self.nesting_level - 1) * 11,
-                                                    #now_time - SimpleHierarchicalProfiler.level_start[self.nesting_level],
-                                                    now_time - self.interval_start,
-                                                    pre_message,
-                                                    message_to_use))
+                                                 #now_time - SimpleHierProfiler.level_start[self.nesting_level],
+                                                 now_time - self.interval_start,
+                                                 pre_message,
+                                                 message_to_use))
 
     @classmethod
     def get_time(cls) -> float:
@@ -147,13 +147,13 @@ class SimpleHierarchicalProfiler:
         return time.time()
 
     def profile(self, message: str):
-        now_time = SimpleHierarchicalProfiler.get_time()
+        now_time = SimpleHierProfiler.get_time()
         self.format_output(now_time, "", message)
         self.interval_start = now_time
 
 
 
-the_profiler = SimpleHierarchicalProfiler("Main Program")
+the_profiler = SimpleHierProfiler("Main Program")
 
 
 
@@ -324,13 +324,16 @@ def get_exposure_datetime_from_EXIF(exif_dict, filename=None):
     return None  # Failure
 
 
-def get_EXIF_from_directory(directory: Path, href_str: str, file_suffix: str = '*.jpg', after: datetime=None,
+def get_EXIF_from_directory(pathname: Path, href_str: str, file_suffix: str = '*.jpg',
+                            args_dict=None,
+                            after: datetime=None,
                             profile: bool = False, debug: bool = False) -> pd.DataFrame:
     """Create a dictionary of spatial data from the EXIF of photos in a folder.
     Args:
-        directory: Where to search for files (not recursively)
+        pathname: Where to search for files (not recursively)
         href_str: Use this in generating the <a> HTML tag.
         file_suffix: extension of images to read.
+        args_dict: for image control - size, color, etc.
         after - optional - as a time optimization, don't look at any files before this datetime
         profile: generate some run-time timing information if enabled
         debug: more run-time logging if enabled
@@ -345,17 +348,24 @@ def get_EXIF_from_directory(directory: Path, href_str: str, file_suffix: str = '
                                           "gps_timestamp", "gps_datestamp",
                                           "focal_length", "make", "model", "digital_zoom_ratio", "image_width",
                                           "image_height", "orientation"]
-    non_exif_fields = ["filename", "latitude", "longitude", "timestamp", "href", "comment"] # will be DF column headers
+    non_exif_fields = ["filename", "latitude", "longitude", "timestamp", "href", "args_dict", "comment"] # will be DF column headers
 
-    nested_profiler = SimpleHierarchicalProfiler("get_EXIF_from_directory: {}".format( directory))
+    nested_profiler = SimpleHierProfiler("get_EXIF_from_directory: {}".format(pathname))
 
     coord_df = pd.DataFrame(columns=non_exif_fields + exif_fields)
-    if after is None:
-        source_files = [f for f in Path(directory).rglob(file_suffix)] if (directory is not None) else []
+    if Path(pathname).is_dir():
+        if after is None:
+            source_files = [f for f in Path(pathname).rglob(file_suffix)] if (pathname is not None) else []
+        else:
+            after_ts = datetime.datetime.timestamp(after)
+            source_files = [f for f in Path(pathname).rglob(file_suffix) if (f.stat().st_mtime >= after_ts)] if (
+                    pathname is not None) else []
+    elif Path(pathname).is_file():
+        source_files = [pathname] # Ignore both suffix and after if passed a specific file.
     else:
-        after_ts = datetime.datetime.timestamp(after)
-        source_files = [f for f in Path(directory).rglob(file_suffix) if (f.stat().st_mtime >= after_ts)] if (
-                directory is not None) else []
+        print("WARNING: {} is not a directory or a file".format(pathname))
+        source_files = []
+
     nested_profiler.profile("Expanded {} sourcefiles".format(len(source_files)))
 
     file_count = 0
@@ -374,18 +384,19 @@ def get_EXIF_from_directory(directory: Path, href_str: str, file_suffix: str = '
         new_row_dict["latitude"] = latitude
         new_row_dict["longitude"] = longitude
         new_row_dict["href"] = href_str
+        new_row_dict["args_dict"] = args_dict
         new_row_dict["comment"] = None
         new_timestamp = get_exposure_datetime_from_EXIF(exif_dict, str_f)
         if new_timestamp is not None:
             utc_timestamp = new_timestamp.astimezone(timezone.utc)
             new_row_dict["timestamp"] = utc_timestamp
         # coord_df = coord_df.append(new_row_dict, ignore_index=True) # Deprecated due to run-time FutureWarning
-        coord_df = pd.concat([coord_df, pd.DataFrame.from_records([
-            new_row_dict])], sort=False)  # https://stackoverflow.com/questions/70837397/good-alternative-to-pandas-append-method-now-that-it-is-being-deprecated
+        # https://stackoverflow.com/questions/70837397/good-alternative-to-pandas-append-method-now-that-it-is-being-deprecated
+        coord_df = pd.concat([coord_df, pd.DataFrame.from_records([new_row_dict])], sort=False)
         added_file_count += 1
 
     nested_profiler.profile("Looped thru {} {} files in directory {}: ({} files skipped or excluded)".format(
-        file_count, file_suffix, directory, file_count - added_file_count))
+        file_count, file_suffix, pathname, file_count - added_file_count))
     return coord_df
 
 
@@ -452,7 +463,7 @@ def rows_with_identical_values_for_indicated_columns2(df: pd.DataFrame, column_h
 
 
 def read_gpx_file(filename: Path, include_datetime=False, profile: bool = False):  # returns a list of tracks
-    profiler = SimpleHierarchicalProfiler("read_gpx_file({}".format(filename))
+    profiler = SimpleHierProfiler("read_gpx_file({}".format(filename))
 
     # Get EXIF info
     with open(filename, 'r') as gpx_file:
@@ -562,7 +573,14 @@ def attempt_to_recover_GPS_coords_in_images(image_df, gpx_files, debug_level=0, 
     return image_df, corrected_count
 
 
-class XYZ:
+class DateTimeCheckboxMgr:
+    """Collects a bunch of date/times - reformats each into a string that contains only the desired information.
+    For example, the 'day' format includes the year, month and day-of month, but drops hours, minutes and seconds. Thus
+    all markers which represent something (photos or tracks) originating on the same day can be controlled by the same
+    checkbox.
+    These formatted strings are collected into a set.  They will be alphanumerically sorted when generating the menu
+    but may be substituted with a more user-friendly format for display.
+    """
     checkbox_datestamps = set()  # Collection of strings - representing all checkbox_datestamps used in photos and/or
                                 # hiking tracks. Should be in local-time (not  UTC). This is used to create the menu
                                 # checkbox control, so whatever resolution (year, month-year, day-month-year, etc.) that
@@ -600,24 +618,26 @@ class XYZ:
         date_string = TzHelper.as_local(datetime_arg).strftime(date_format_string)
         return date_string
     @classmethod
-    def go_the_otherway(cls, formatted_datetime_str, how=None):
+    def user_format(cls, formatted_datetime_str, how=None):
+        """Format the datetime for presentation to the user as a label for a checkbox in the menu.
+        """
         if how is None: how=cls.how
         if how in cls.format_map:
             the_tuple = cls.format_map[how]
         else:
             the_tuple = cls.format_map[cls.default_format]
-
         if the_tuple[1] != "":
             reformatted_datestamp = datetime.datetime.strptime(formatted_datetime_str, the_tuple[0]).strftime(the_tuple[1])
         else:
             reformatted_datestamp = formatted_datetime_str # No need to decode and re-encode
-        print("go_the_otherway({},{}: tuple=({},{}), reformatted={}".format(formatted_datetime_str, how, the_tuple[0], the_tuple[1], reformatted_datestamp))
         return reformatted_datestamp
 
     @classmethod
     def submit_checkbox_datetime(cls, the_datetime, how=None) -> str:
+        """Enter any date/time that should be controlled by the checkbox menu.
+        """
         if how is None: how=cls.how
-        formatted_str = XYZ.get_datetime_checkbox_str(the_datetime, how) if the_datetime is not None else "Undated"
+        formatted_str = DateTimeCheckboxMgr.get_datetime_checkbox_str(the_datetime, how) if the_datetime is not None else "Undated"
         cls.checkbox_datestamps.add(formatted_str)
         return formatted_str
 
@@ -636,6 +656,16 @@ def remove_excluded_points(list_of_points, exclude_boxes, show_rejections: bool 
 
 
 class ImagePopupHelper:
+    """One or more images will be represented by a single circle marker on the map. Hovering over the circle or clicking
+    on the circle brings up a popup which lists the one or more image names - each being hypertext that can be clicked
+    on to display that image in the browser.
+    We use a simple rounding algorithm on the latitude, and longitude to find the possibly multiple images that should
+    be represented by a single circle. We average the actual GPS latitude/longitude of each image to determine where to
+    display the circle marker (rather than use the rounded coordinates - which would result in less accuracy and a
+    somewhat grid pattern for the markers).
+    This class helps create that popup. The popup contains an HTML table that displays several attributes about each
+    image.
+    """
     def __init__(self, df_len):
         self.df_len = df_len
         self.lat_sum = 0
@@ -654,6 +684,9 @@ class ImagePopupHelper:
         if timestamp is not None:
             self.timestamps.add(timestamp)
 
+        # THe following might be too specific to be useful - but wanted to display some relevant information that would
+        # help the user identify the desired photo - especially if there are numerous photos listed in the popup.
+        # It might not be possible to achieve that goal with generic EXIF info - so consider this an experiment.
         base_filename = os.path.basename(filename) if filename is not None else ""
         lens_type = ""
         if make in ["samsung"]:
@@ -666,23 +699,23 @@ class ImagePopupHelper:
                                     "telephoto" if (digital_zoom_ratio <= 4.0) else \
                                         "long telephoto"
 
-        # width and height might need to be reversed based on orientation: http://sylvana.net/jpegcrop/exif_orientation.html
+        # width & height might be reversed based on orientation: http://sylvana.net/jpegcrop/exif_orientation.html
         oriented_width = image_width if orientation < 4 else image_height
         oriented_height = image_height if orientation < 4 else image_width
 
         self.popup_str = self.popup_str + self.row_start + \
-                         '<a href="{}/{}" target="_blank" rel="noopener noreferrer">{}</a>{}{}{}{}x{}{}{}{}{}{}{}'.format(
-                             href,
-                             base_filename, base_filename, self.row_mid,
-                             lens_type, self.row_mid,
-                             oriented_width, oriented_height, self.row_mid,
-                             TzHelper.as_local(timestamp).strftime("%-d-%b-%Y"), self.row_mid,
-                             TzHelper.as_local(timestamp).strftime("%-I:%M %p"), self.row_mid,
-                             comment if comment is not None else ""
-                         ) + self.row_end
+                 '<a href="{}/{}" target="_blank" rel="noopener noreferrer">{}</a>{}{}{}{}x{}{}{}{}{}{}{}'.format(
+                     href,
+                     base_filename, base_filename, self.row_mid,
+                     lens_type, self.row_mid,
+                     oriented_width, oriented_height, self.row_mid,
+                     TzHelper.as_local(timestamp).strftime("%-d-%b-%Y"), self.row_mid,
+                     TzHelper.as_local(timestamp).strftime("%-I:%M %p"), self.row_mid,
+                     comment if comment is not None else ""
+                 ) + self.row_end
 
 
-def create_photo_marker(df, include_boxes, exclude_boxes, show_rejections, the_photos_args_dict, checkbox_how):
+def create_photo_marker(df, include_boxes, exclude_boxes, show_rejections, checkbox_how):
     df_len = len(df)
     df.sort_index(inplace=True)
 
@@ -690,10 +723,10 @@ def create_photo_marker(df, include_boxes, exclude_boxes, show_rejections, the_p
 
     [  # One long list-comprehension statement below
       popup_gen.photo_marker_add_row(
-                                    latitude, longitude, timestamp, image_width, image_height, orientation, filename,
-                                    make, model, digital_zoom_ratio, href, comment) \
-     for
-     latitude, longitude, timestamp, image_width, image_height, orientation, filename, make, model, digital_zoom_ratio, href, comment
+                                    latitude, longitude, timestamp, image_width, image_height, orientation,
+                                    filename, make, model, digital_zoom_ratio, href, comment) \
+     for latitude, longitude, timestamp, image_width, image_height, orientation, \
+                    filename, make, model, digital_zoom_ratio, href, comment \
      in zip(
         df['latitude'], df['longitude'], df['timestamp'], df['image_width'], df['image_height'], df['orientation'],
         df['filename'], df['make'], df['model'], df['digital_zoom_ratio'], df['href'], df['comment'])
@@ -702,8 +735,11 @@ def create_photo_marker(df, include_boxes, exclude_boxes, show_rejections, the_p
     if df_len > 1:
         popup_gen.popup_str = popup_gen.popup_str + "</table>"
 
+    the_photos_args_dict = df['args_dict'][0] # This is not great - the dictionaries could be differnet at different
+                                                # rows. But can have only one per CircleMarker - so what to do?
+    formatted_timestamp = ""
     for ts in sorted(popup_gen.timestamps):
-        formatted_timestamp = XYZ.submit_checkbox_datetime(ts)
+        formatted_timestamp += DateTimeCheckboxMgr.submit_checkbox_datetime(ts) + " "
     lat_mean = popup_gen.lat_sum / df_len
     lon_mean = popup_gen.lon_sum / df_len
     if accessible_point((lat_mean, lon_mean), include_boxes, exclude_boxes, show_rejections):
@@ -1025,9 +1061,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("-checkbox_how", "--checkbox_how", type=str, action="store", default="day",
                             help="granularity of the dates in the checkbox menu: should be one of 'year', 'month', 'week', 'day', or 'hour'")
 
-
     args = arg_parser.parse_args()
-
     if args.debug >= 1:
         print("folium version={}".format(folium.__version__))
         print("pandas version={}".format(pd.__version__))
@@ -1050,7 +1084,7 @@ if __name__ == "__main__":
         print("checkbox_how({}): {}".format(type(args.checkbox_how), args.checkbox_how))
         print("---------------------")
 
-    XYZ.set_how(args.checkbox_how)
+    DateTimeCheckboxMgr.set_how(args.checkbox_how)
     round_resolution_degrees = feet_to_degrees(args.pm_group)
 
     folium_map = folium.Map(tiles="OpenStreetMap", control_scale=False)
@@ -1083,32 +1117,6 @@ if __name__ == "__main__":
         if args.debug >= 3: print("exclude_boxes={}".format(exclude_boxes))
     the_profiler.profile("Decode the include/exclude boxes")
 
-    # Read EXIF data - create a DataFrame
-    # DVO HELP - should support reading from mulitple directories - i.e. accumulating in the exif_dict - the following
-    # code has a loop - but only the last iteration is used (i.e. that's a bug)
-    if (args.photosdir is not None) and (len(args.photosdir) >= 1):
-        nested_profiler = SimpleHierarchicalProfiler("Scanning EXIF data from photos")
-        jpeg_df = pd.DataFrame()
-        for stuff in args.photosdir:
-            directory_name = stuff[0]
-            the_photos_href = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else ""
-            the_photos_args_string = stuff[2] if (len(stuff) >= 3) and (stuff[1] is not None) else ""
-            the_photos_args_dict = string_to_dict(the_photos_args_string)
-
-            coord_df = get_EXIF_from_directory(directory_name, the_photos_href, debug=False)
-
-            # create dataframe from extracted jpeg/EXIF data
-            jpeg_df = pd.concat([jpeg_df, coord_df])
-            nested_profiler.profile("Read EXIF data from directory ({}) and created DataFrame".format(directory_name))
-        jpeg_df.set_index('filename', inplace=True, drop=False)
-        nested_profiler.end()
-
-    the_profiler.profile("Read EXIF data and created DataFrame")
-
-    if (args.correctgps >= 1) or (args.cachecorrections is not None):
-        jpeg_df, corrected_count = correct_EXIF_GPS_coordinates(jpeg_df, args.correctgps >= 1, args.cachecorrections)
-
-    the_profiler.profile("Corrected {} GPS coordinate from image files.".format(corrected_count))
 
     if args.polygon is not None:
         for stuff in args.polygon:
@@ -1173,6 +1181,35 @@ if __name__ == "__main__":
     photo_group = folium.FeatureGroup("Photographs", control=True, show=True)
     folium_map.add_child(photo_group)
 
+    # Read EXIF data - create a DataFrame
+    # DVO HELP - should support reading from mulitple directories - i.e. accumulating in the exif_dict - the following
+    # code has a loop - but only the last iteration is used (i.e. that's a bug)
+    if (args.photosdir is not None) and (len(args.photosdir) >= 1):
+        nested_profiler = SimpleHierProfiler("Scanning EXIF data from photos")
+        jpeg_df = pd.DataFrame()
+        for the_tuple in args.photosdir:
+            directory_name = the_tuple[0]
+            the_photos_href = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else ""
+            the_photos_args_string = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[1] is not None) else ""
+            the_photos_args_dict = string_to_dict(the_photos_args_string)
+
+            coord_df = get_EXIF_from_directory(directory_name, the_photos_href,
+                                               args_dict=the_photos_args_dict, debug=False)
+
+            # create dataframe from extracted jpeg/EXIF data
+            jpeg_df = pd.concat([jpeg_df, coord_df])
+            nested_profiler.profile("Read EXIF data from directory ({}) and created DataFrame".format(directory_name))
+        jpeg_df.set_index('filename', inplace=True, drop=False)
+        nested_profiler.end()
+
+    the_profiler.profile("Read EXIF data and created DataFrame")
+
+    if (args.correctgps >= 1) or (args.cachecorrections is not None):
+        jpeg_df, corrected_count = correct_EXIF_GPS_coordinates(jpeg_df, args.correctgps >= 1, args.cachecorrections)
+
+    the_profiler.profile("Corrected {} GPS coordinate from image files.".format(corrected_count))
+
+
     if round_resolution_degrees != 0.0:
         # https://stackoverflow.com/questions/26133538/round-a-single-column-in-pandas
         if "latitude" in jpeg_df:
@@ -1187,39 +1224,16 @@ if __name__ == "__main__":
                 lambda value: round(value / round_resolution_degrees) * round_resolution_degrees if (
                         (value is not None) and not math.isnan(value)) else None)
 
-        if args.debug >= 3:
-            try:
-                [print(
-                    "Original: ({:8.6f},{:8.6f})   Rounded: ({:8.6f},{:8.6f}, {}))".format(lat, lon, lat_rnd, lon_rnd,
-                                                                                           (lat == lat_rnd) and (
-                                                                                                   lon == lon_rnd)))
-                    for lat, lon, lat_rnd, lon_rnd in zip(
-                    jpeg_df['latitude'], jpeg_df['longitude'], jpeg_df['lat_round'], jpeg_df['lon_round'])]
-            except BaseException as e:
-                print("Exception encountered in debug code: {}. {}".format(type(e), e))
-
         # Sort by lat_round and then lon_round
         if ("lat_round" in jpeg_df) and ("lon_round" in jpeg_df):
             jpeg_df.sort_values(by=['lat_round', 'lon_round'], inplace=True)
-
-        if args.debug >= 3:
-            try:
-                [print(
-                    "Original: ({:8.6f},{:8.6f})   Rounded and Sorted: ({:8.6f},{:8.6f}, {})".format(lat, lon, lat_rnd,
-                                                                                                     lon_rnd, (
-                                                                                                             lat == lat_rnd) and (
-                                                                                                             lon == lon_rnd)))
-                    for lat, lon, lat_rnd, lon_rnd in zip(
-                    jpeg_df['latitude'], jpeg_df['longitude'], jpeg_df['lat_round'], jpeg_df['lon_round'])]
-            except BaseException as e:
-                print("WARNING exception caught in debug code: {}, {}".format(type(e), e))
 
     the_profiler.profile("Sorted by latitude and longitude")
 
     dbl_filtered_df = jpeg_df.groupby(["lat_round", "lon_round"])
     for lon_round, thing2 in dbl_filtered_df:
         thing3 = thing2.copy()  # This "fixes" the SettingWithCopyWarning mentioned elsewhere in this file.
-        create_photo_marker(thing3, include_boxes, exclude_boxes, args.showrejections, the_photos_args_dict, args.checkbox_how)
+        create_photo_marker(thing3, include_boxes, exclude_boxes, args.showrejections, args.checkbox_how)
 
     the_profiler.profile("Grouped by latitude and longitude")
 
@@ -1227,7 +1241,7 @@ if __name__ == "__main__":
         pathname = stuff[0] if (len(stuff) >= 1) and (stuff[0] is not None) else ""
         feature_name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else ""
         the_args_string = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
-        profiler = SimpleHierarchicalProfiler("Loop to read/process GPX for {}".format(pathname))
+        profiler = SimpleHierProfiler("Loop to read/process GPX for {}".format(pathname))
         the_args_dict = string_to_dict(the_args_string)
         file_list = [os.path.join(pathname, f) for f in sorted(os.listdir(pathname), reverse=True)] if os.path.isdir(
             pathname) else [pathname]
@@ -1245,7 +1259,7 @@ if __name__ == "__main__":
                     print("type(list_of_tracks)={}".format(type(list_of_tracks)))
                     print("list_of_tracks=", list_of_tracks)
 
-                formatted_timestamp = XYZ.submit_checkbox_datetime(first_time)
+                formatted_timestamp = DateTimeCheckboxMgr.submit_checkbox_datetime(first_time)
 
                 for track_tuple in list_of_tracks:
                     end_to_end_length = calc_end_to_end_length(track_tuple[1])
@@ -1287,10 +1301,9 @@ if __name__ == "__main__":
     checkboxes = '<form id="date_menu_form_id" onsubmit="return false;"><fieldset><legend align="center">Date Selector</legend>\n' \
                  + '<table class="image-list-popup"><caption>For Tracks and Photos which are enabled in the Layers menu.</caption>\n'
     cell_count = 0
-    for datestamp in sorted(XYZ.checkbox_datestamps, reverse=True):
+    for datestamp in sorted(DateTimeCheckboxMgr.checkbox_datestamps, reverse=True):
         cell_count += 1
-        #pretty_datestamp = datetime.datetime.strptime(datestamp, "%Y%m%d").strftime("%d-%b-%Y")
-        pretty_datestamp = XYZ.go_the_otherway( datestamp, args.checkbox_how )
+        pretty_datestamp = DateTimeCheckboxMgr.user_format(datestamp, args.checkbox_how)
         if ((cell_count - 1) % 4) == 0:
             checkboxes += "<tr>"
         # Using """ for single-line string below - since it needs to contain both " and ' strings.
