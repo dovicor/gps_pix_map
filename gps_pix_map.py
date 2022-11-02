@@ -1,18 +1,14 @@
-import sys
-import json
 from pathlib import Path
 
 import math
 import os
 import argparse
 import folium
-from folium import plugins
 import gpxpy
-import matplotlib
 import numpy as np
 import pandas as pd
 from exif import Image as ExifImage
-import webbrowser
+#import webbrowser
 
 import time
 import datetime
@@ -21,7 +17,7 @@ from datetime import timezone
 from PIL import Image as PilImage
 
 
-def StringToDict(the_string):
+def string_to_dict(the_string):
     """the_string should resemble "{key1: value1, key2: value2}" or "key1: value1, key2: value2"
     Allows the user to pass in, via command line arguments, arbitrary arguments to be passed
     to underlying folium calls. Thus it is up to the user to determine the correct names of the keys.
@@ -36,12 +32,12 @@ def StringToDict(the_string):
         # https://www.geeksforgeeks.org/python-convert-string-dictionary-to-dictionary/
         the_dict = eval(the_string)
         return the_dict
-    except BaseException as e:
-        print("Exception while attempting to eval({}): {}, {}".format(the_string, type(e), e))
+    except BaseException as ee:
+        print("Exception while attempting to eval({}): {}, {}".format(the_string, type(ee), ee))
     return {}
 
 
-def UpdateDataFrame(original_df, updater_df):
+def update_DataFrame(original_df, updater_df):
     """
     Returns a new DataFrame that is a variation of original_df, such that any new or different information from
     updater_df is used instead. So if both DFs have a cell at the same row/index and column, but the values differ, then
@@ -49,6 +45,7 @@ def UpdateDataFrame(original_df, updater_df):
     """
     # I tried many variations of doing this directly with the dataframes - using merge(), merge_ordered(), update(),
     # join(), concat() but couldn't find any way to get what I wanted (which seems relatively simple).
+    # Be aware this has not been thoroughly tested.
 
     dict1 = original_df.to_dict(orient="index")
     dict2 = updater_df.to_dict(orient="index")
@@ -60,7 +57,6 @@ def UpdateDataFrame(original_df, updater_df):
             dict1[key] = dict2[key]
     new_df = pd.DataFrame.from_dict(dict1, orient="index")
     new_df2 = new_df.where(pd.notnull(new_df), None)
-
     return new_df2
 
 
@@ -83,30 +79,83 @@ class TzHelper:
     # https://stackoverflow.com/questions/4563272/how-to-convert-a-utc-datetime-to-a-local-datetime-using-only-standard-library/13287083#13287083
     local_tz = timezone(datetime.timedelta(seconds=-time.timezone))
 
-    def insert_timezone(
-            datetime_arg):  # This shifts the timezone without changing the date/tima values to compensate (which
-                            # effectively changes the time if converted to UTC)
-        # So use this on naive date/times we know to be in local timezone.
+    @classmethod
+    def insert_timezone(cls,datetime_arg : datetime):  # This shifts the timezone without changing the date/time values to
+                                                    # compensate (which effectively changes the time if converted to
+                                                    # UTC). So use this on naive date/times we know to be in
+                                                    # local timezone.
         converted_datetime = datetime_arg.replace(tzinfo=TzHelper.local_tz)
         return converted_datetime
 
-    def as_local(datetime_arg : datetime):
+    @classmethod
+    def as_local(cls, datetime_arg : datetime):
         return datetime_arg.astimezone(TzHelper.local_tz)
 
-
-def get_time() -> float:
-    """Returns the number of seconds (with milliseconds or better resolution) since the "epoch" (look it up). Primary
-    use is to take the difference between two calls to determine the time interval (in seconds) - to help analyze
-    run-time performance, etc.
+class SimpleHierarchicalProfiler:
+    """Prints execution times between call points.
+    About as simple as can get to measure runtime at various locations.
     """
-    return time.time()
+    level_start = []
+    level_name = []
+
+    def __init__(self, the_level_name: str):
+        self.i_am_alive = True
+        self.nesting_level = len(SimpleHierarchicalProfiler.level_start)
+        self.interval_start = SimpleHierarchicalProfiler.get_time()
+        SimpleHierarchicalProfiler.level_start.append(self.interval_start)
+        SimpleHierarchicalProfiler.level_name.append(the_level_name)
+        self.format_output(self.interval_start, "Start ")
+
+    def __del__(self):
+        """Yuck - see comments for end()
+        """
+        if not self.i_am_alive:
+            #print("Object already end()'d in __del__()")
+            return
+        self.end()
+
+    def end(self):
+        """Sort-of like a destructor - I've got a C++ mindset and wanted something to get called when an object
+        'goes out of scope'. Python is different from C++ and the objects don't go out-of-scope at the end of a function
+        so I need to explicitly call this.
+        """
+        if not self.i_am_alive:
+            #print("Object already end()'d in end()")
+            return
+
+        now_time = SimpleHierarchicalProfiler.get_time()
+        self.format_output(now_time, "Endof ")
+        SimpleHierarchicalProfiler.level_start.pop()
+        SimpleHierarchicalProfiler.level_name.pop()
+        self.i_am_alive = False
+
+    def format_output(self, now_time, pre_message="", message=None):
+        message_to_use = message if message is not None else SimpleHierarchicalProfiler.level_name[self.nesting_level]
+        print("{:10.6f} {}{:10.6f}: {}{}".format(now_time - SimpleHierarchicalProfiler.level_start[0],
+                                             ' ' * (self.nesting_level - 1) * 11,
+                                                    #now_time - SimpleHierarchicalProfiler.level_start[self.nesting_level],
+                                                    now_time - self.interval_start,
+                                                    pre_message,
+                                                    message_to_use))
+
+    @classmethod
+    def get_time(cls) -> float:
+        """Returns the number of seconds (with milliseconds or better resolution) since the "epoch" (look it up). Primary
+        use is to take the difference between two calls to determine the time interval (in seconds) - to help analyze
+        run-time performance, etc.
+        """
+        return time.time()
+
+    def profile(self, message: str):
+        now_time = SimpleHierarchicalProfiler.get_time()
+        self.format_output(now_time, "", message)
+        self.interval_start = now_time
 
 
-time_program_start = get_time()
 
-checkbox_datestamps = set()  # Collection of all checkbox_datestamps used in photos and/or hiking tracks. Should be in local-time (not
-                    # UTC). This is used to create the menu checkbox control, so whatever resolution (year, month-year,
-                    # day-month-year, etc.) that is wanted for that user-control, should be used here.
+the_profiler = SimpleHierarchicalProfiler("Main Program")
+
+
 
 
 EARTH_CIRCUMFERENCE_FEET = 24902 * 5280
@@ -253,18 +302,15 @@ def get_exposure_datetime_from_EXIF(exif_dict, filename=None):
         return gps_datetime  # Success (variation 3)
 
     if the_datetime is not None:  # This ia a timezone naive - how to add/set for the local timezone?
-        if True:
-            # https://stackoverflow.com/questions/4563272/how-to-convert-a-utc-datetime-to-a-local-datetime-using-only-standard-library/13287083#13287083
-            local_tz = timezone(datetime.timedelta(seconds=-time.timezone))
-            the_datetime = the_datetime.replace(tzinfo=local_tz)
-            return the_datetime  # succeess? (variation 4)
-        else:
-            return TzHelper.insert_timezone(the_datetime)
+        # https://stackoverflow.com/questions/4563272/how-to-convert-a-utc-datetime-to-a-local-datetime-using-only-standard-library/13287083#13287083
+        local_tz = timezone(datetime.timedelta(seconds=-time.timezone))
+        the_datetime = the_datetime.replace(tzinfo=local_tz)
+        return the_datetime  # succeess? (variation 4)
 
+    basename = os.path.basename(filename)
     try:
-        basename = os.path.basename(filename)
-        filename_datetime = datetime.datetime.strptime(basename,
-                                                       "%Y%m%d_%H%M%S.jpg")  # Specific filename format for my Samsung/Android phone - uses creating date/time. Are there others to support?
+        # Specific filename format for my Samsung/Android phone - uses creating date/time. Are there others to support?
+        filename_datetime = datetime.datetime.strptime(basename, "%Y%m%d_%H%M%S.jpg")
     except ValueError as e:
         print("Caught VaueError exception for strptime({}, %Y%m%d_%H%M%S.jpg: {}".format(basename, e))
         # Not generating an error here - just move on to the next approach
@@ -283,7 +329,7 @@ def get_EXIF_from_directory(directory: Path, href_str: str, file_suffix: str = '
     """Create a dictionary of spatial data from the EXIF of photos in a folder.
     Args:
         directory: Where to search for files (not recursively)
-        href: Use this in generating the <a> HTML tag.
+        href_str: Use this in generating the <a> HTML tag.
         file_suffix: extension of images to read.
         after - optional - as a time optimization, don't look at any files before this datetime
         profile: generate some run-time timing information if enabled
@@ -300,7 +346,8 @@ def get_EXIF_from_directory(directory: Path, href_str: str, file_suffix: str = '
                                           "focal_length", "make", "model", "digital_zoom_ratio", "image_width",
                                           "image_height", "orientation"]
     non_exif_fields = ["filename", "latitude", "longitude", "timestamp", "href", "comment"] # will be DF column headers
-    time_func_start = get_time()
+
+    nested_profiler = SimpleHierarchicalProfiler("get_EXIF_from_directory: {}".format( directory))
 
     coord_df = pd.DataFrame(columns=non_exif_fields + exif_fields)
     if after is None:
@@ -309,9 +356,7 @@ def get_EXIF_from_directory(directory: Path, href_str: str, file_suffix: str = '
         after_ts = datetime.datetime.timestamp(after)
         source_files = [f for f in Path(directory).rglob(file_suffix) if (f.stat().st_mtime >= after_ts)] if (
                 directory is not None) else []
-    time_func_find_files = get_time()
-    if profile:
-        print("Expanded {} sourcefiles: {:.6f}".format(len(source_files), time_func_find_files - time_func_start))
+    nested_profiler.profile("Expanded {} sourcefiles".format(len(source_files)))
 
     file_count = 0
     added_file_count = 0
@@ -339,9 +384,8 @@ def get_EXIF_from_directory(directory: Path, href_str: str, file_suffix: str = '
             new_row_dict])], sort=False)  # https://stackoverflow.com/questions/70837397/good-alternative-to-pandas-append-method-now-that-it-is-being-deprecated
         added_file_count += 1
 
-    time_after_loop = get_time()
-    if profile: print("Time to loop thru {} {} files in folder {}: {:.6f} ({} files skipped or excluded)".format(
-        file_count, file_suffix, directory, time_after_loop - time_func_find_files, file_count - added_file_count))
+    nested_profiler.profile("Looped thru {} {} files in directory {}: ({} files skipped or excluded)".format(
+        file_count, file_suffix, directory, file_count - added_file_count))
     return coord_df
 
 
@@ -408,8 +452,7 @@ def rows_with_identical_values_for_indicated_columns2(df: pd.DataFrame, column_h
 
 
 def read_gpx_file(filename: Path, include_datetime=False, profile: bool = False):  # returns a list of tracks
-    t1 = get_time()
-    if profile: print("File:({})".format(filename), end='', flush=True)
+    profiler = SimpleHierarchicalProfiler("read_gpx_file({}".format(filename))
 
     # Get EXIF info
     with open(filename, 'r') as gpx_file:
@@ -434,7 +477,6 @@ def read_gpx_file(filename: Path, include_datetime=False, profile: bool = False)
                     points.append(tuple([point.latitude, point.longitude]))
         list_of_tracks.append((track.name, points, segment))
 
-    if profile: print(" - took {:.6f} seconds".format(get_time() - t1))
     return list_of_tracks, first_time
 
 
@@ -521,24 +563,68 @@ def attempt_to_recover_GPS_coords_in_images(image_df, gpx_files, debug_level=0, 
 
 
 class XYZ:
-    date_to_feature_map = {}  # class variable (ala C++'s static?)
+    checkbox_datestamps = set()  # Collection of strings - representing all checkbox_datestamps used in photos and/or
+                                # hiking tracks. Should be in local-time (not  UTC). This is used to create the menu
+                                # checkbox control, so whatever resolution (year, month-year, day-month-year, etc.) that
+                                # is wanted for that user-control, should be used here.
+                                # See also args.checkbox_how
+
+    default_format = "day"
+    how = default_format
+    format_map = { # maps from a date/time format indication string (such as via -checkbox_how command line argument) to
+                    # a tuple:
+                    #   first field in tuple is strftime (and strptime) format string for internal processing
+                    #       - should sort correctly alphanumerically (as a string)
+                    #       - this will be used as a Javascrpt classname - so whatever rules that implies
+                    #   second field in the tuple is the preferred user-visible format - as will appear in the checkbox
+                    #           menu. If empty, then the first field is used.
+                    "year":  ("%Y",         "%Y"             ),
+                    "month": ("%Y%m",       "%b-%Y"          ),
+                    "day":   ("%Y%m%d",     "%b-%-d-%Y"      ),
+                    "hour":  ("%Y%m%d%H",   "%b-%-d-%Y %-I%p"), # An overkill?
+                    "minute":("%Y%m%d%H%M",   "%b-%-d-%Y %-I:%M %p"), # Surely an overkill - but easy to implement
+                    "second":("%Y%m%d%H%M%S",   "%b-%-d-%Y %-I:%M:%S %p"), # Ditto and more
+                    "week":  ("%Y: week %U",""                ) # strptime() seems to have a bug such
+                                                                 # that it won't decode the %U field.
+    }
+    @classmethod
+    def get_datetime_checkbox_str(cls, datetime_arg, how=None):
+        # Covert datetime to desired string - i.e. with only year, or year/month or year/month/day - as indicated by options
+        if how is None: how=cls.how
+        if how in cls.format_map:
+            date_format_string = cls.format_map[how][0]
+        else:
+            print("WARNING - unrecognized how string: '{}', using '{}' instead".format(how, cls.default_format))
+            date_format_string = cls.format_map[cls.default_format][0]
+
+        date_string = TzHelper.as_local(datetime_arg).strftime(date_format_string)
+        return date_string
+    @classmethod
+    def go_the_otherway(cls, formatted_datetime_str, how=None):
+        if how is None: how=cls.how
+        if how in cls.format_map:
+            the_tuple = cls.format_map[how]
+        else:
+            the_tuple = cls.format_map[cls.default_format]
+
+        if the_tuple[1] != "":
+            reformatted_datestamp = datetime.datetime.strptime(formatted_datetime_str, the_tuple[0]).strftime(the_tuple[1])
+        else:
+            reformatted_datestamp = formatted_datetime_str # No need to decode and re-encode
+        print("go_the_otherway({},{}: tuple=({},{}), reformatted={}".format(formatted_datetime_str, how, the_tuple[0], the_tuple[1], reformatted_datestamp))
+        return reformatted_datestamp
 
     @classmethod
-    def get_datetime_featuregroup(cls, datetime_arg):
-        # Covert datetime to desired string - i.e. with only year, or year/month or year/month/day - as indicated by options
-        date_string = ""
-        if False:  # Convert to year (only)
-            date_string = datetime_arg.strftime("%Y")
-        elif True:  # Convert to year and month
-            date_string = datetime_arg.strftime("%Y-%b")
-        elif False:  # Convet to year and week number (starting on Sunday)
-            date_string = datetime_arg.strftime("%Y-week%U")
-        else:  # Specific date (year, month, day)
-            date_string = datetime_arg.strftime("%Y-%b-%-d")
+    def submit_checkbox_datetime(cls, the_datetime, how=None) -> str:
+        if how is None: how=cls.how
+        formatted_str = XYZ.get_datetime_checkbox_str(the_datetime, how) if the_datetime is not None else "Undated"
+        cls.checkbox_datestamps.add(formatted_str)
+        return formatted_str
 
-        if not (date_string in cls.date_to_feature_map):
-            cls.date_to_feature_map["date_string"] = folium.FeatureGroup(date_string)
-        return cls.date_to_feature_map["date_string"]
+    @classmethod
+    def set_how(cls, new_how):
+        cls.how = new_how
+
 
 
 def remove_excluded_points(list_of_points, exclude_boxes, show_rejections: bool = False):
@@ -596,27 +682,28 @@ class ImagePopupHelper:
                          ) + self.row_end
 
 
-def create_photo_marker(df, include_boxes, exclude_boxes, show_rejections, the_photos_args_dict):
+def create_photo_marker(df, include_boxes, exclude_boxes, show_rejections, the_photos_args_dict, checkbox_how):
     df_len = len(df)
     df.sort_index(inplace=True)
 
     popup_gen = ImagePopupHelper(df_len)
-    [popup_gen.photo_marker_add_row(latitude, longitude, timestamp, image_width, image_height, orientation, filename, make,
-                                    model, digital_zoom_ratio, href, comment) \
+
+    [  # One long list-comprehension statement below
+      popup_gen.photo_marker_add_row(
+                                    latitude, longitude, timestamp, image_width, image_height, orientation, filename,
+                                    make, model, digital_zoom_ratio, href, comment) \
      for
      latitude, longitude, timestamp, image_width, image_height, orientation, filename, make, model, digital_zoom_ratio, href, comment
      in zip(
         df['latitude'], df['longitude'], df['timestamp'], df['image_width'], df['image_height'], df['orientation'],
-        df['filename'], df['make'], df['model'], df['digital_zoom_ratio'], df['href'], df['comment'])]
+        df['filename'], df['make'], df['model'], df['digital_zoom_ratio'], df['href'], df['comment'])
+     ]
 
     if df_len > 1:
         popup_gen.popup_str = popup_gen.popup_str + "</table>"
 
-    ts_string = ""
     for ts in sorted(popup_gen.timestamps):
-        formatted_timestamp = TzHelper.as_local(ts).strftime("%Y%m%d")
-        checkbox_datestamps.add(formatted_timestamp)
-        ts_string += formatted_timestamp + " "
+        formatted_timestamp = XYZ.submit_checkbox_datetime(ts)
     lat_mean = popup_gen.lat_sum / df_len
     lon_mean = popup_gen.lon_sum / df_len
     if accessible_point((lat_mean, lon_mean), include_boxes, exclude_boxes, show_rejections):
@@ -657,7 +744,7 @@ def deal_with_cache_corrections_file(jpeg_df, filename):
     else:
         original_csv = pd.DataFrame()
 
-    jpeg_df = UpdateDataFrame(jpeg_df, original_csv)
+    jpeg_df = update_DataFrame(jpeg_df, original_csv)
 
     try:
         jpeg_df.loc[:, ["latitude", "longitude", "original_lat", "original_lon", "comment"]].sort_index().to_csv(
@@ -698,7 +785,7 @@ def correct_EXIF_GPS_coordinates(jpeg_df, calculate_gps_corrections, cache_file)
 class LiftHelper:
     def __init__(self, name, the_args):
         self.name = name
-        self.the_args_dict = StringToDict(the_args)
+        self.the_args_dict = string_to_dict(the_args)
         self.feature_group = folium.FeatureGroup(name, overlay=True)
         self.feature_group.add_to(folium_map)
 
@@ -731,26 +818,30 @@ def meters_to_US(meters):
             return '{:.0f} miles'.format(distance_miles)
 
 
-def create_track_popup(gpx_track_segment, name):
+def create_track_popup(gpx_track_segment, end_to_end_length_meters, name):
     length_2d_meters = gpx_track_segment.length_2d()
     uphill_meters, downhill_meters = gpx_track_segment.get_uphill_downhill()
     start_time, end_time = gpx_track_segment.get_time_bounds()
     min_elevation, max_elevation = gpx_track_segment.get_elevation_extremes()
     duration = end_time - start_time
-    duration_cleaned = datetime.timedelta(seconds=round(
-        duration.total_seconds()))  # Wow! There's no strftime() equivalent for timedelta. So just trying to get rid of the microseconds
-
+    duration_cleaned = datetime.timedelta(seconds=round(duration.total_seconds()))  # Wow! There's no strftime() equivalent for timedelta.
+                                                                                    # So just trying to get rid of the microseconds
+    trip_type = "round-trip" if end_to_end_length_meters < 500 else "one-way"
     popup_str = ("<table class='image-list-popup'><caption>{}</caption>\n"
-                 "<tr><th>Distance</th><td>{}</td></tr>\n"
+                 "<tr><th>Distance</th><td>{} {}</td></tr>\n"
                  "<tr><th>Duration</th><td>{}</td></tr>\n"
                  "<tr><th>Elevation Range</th><td>{}'..{}'</td></tr>\n"
                  "<tr><th>Uphill</th><td>{:.0f}'</td></tr>\n"
                  "<tr><th>Date</th><td>{}</td></tr>\n"
                  "</table>\n".format(
-        name, meters_to_US(length_2d_meters), duration_cleaned, round(meters_to_feet(min_elevation)),
+        name, meters_to_US(length_2d_meters), trip_type, duration_cleaned, round(meters_to_feet(min_elevation)),
         round(meters_to_feet(max_elevation)),
         meters_to_feet(uphill_meters), start_time.strftime("%d-%b-%Y")))
     return popup_str
+
+def calc_end_to_end_length(path):
+    return gpxpy.geo.distance( path[0][0], path[0][1], None, path[-1][0], path[-1][1], None )
+
 
 
 ######################################################################################################################################
@@ -931,6 +1022,9 @@ if __name__ == "__main__":
                             default=0)
     arg_parser.add_argument("-cachecorrections", "--cachecorrections", type=str, action="store", nargs='?',
                             help="CSV file save/reload corrections from -correctgps.")
+    arg_parser.add_argument("-checkbox_how", "--checkbox_how", type=str, action="store", default="day",
+                            help="granularity of the dates in the checkbox menu: should be one of 'year', 'month', 'week', 'day', or 'hour'")
+
 
     args = arg_parser.parse_args()
 
@@ -953,8 +1047,10 @@ if __name__ == "__main__":
         print("correctgps({}): {}".format(type(args.correctgps), args.correctgps))
         print("cachecorrections({}): {}".format(type(args.cachecorrections), args.cachecorrections))
         print("lifts({}): {}".format(type(args.lifts), args.lifts))
+        print("checkbox_how({}): {}".format(type(args.checkbox_how), args.checkbox_how))
         print("---------------------")
 
+    XYZ.set_how(args.checkbox_how)
     round_resolution_degrees = feet_to_degrees(args.pm_group)
 
     folium_map = folium.Map(tiles="OpenStreetMap", control_scale=False)
@@ -968,11 +1064,12 @@ if __name__ == "__main__":
     folium.TileLayer('Stamen Toner', attr="Stamen Toner", name="Stamen Toner").add_to(folium_map)
     folium.TileLayer('Stamen Watercolor', attr="Stamen Watercolor", name="Stamen Watercolor").add_to(folium_map)
 
-    t1 = get_time()
-    if args.profile: print("Program startup and map initialization took {:.6f}s".format(t1 - time_program_start))
+    the_profiler.profile("Program startup, argument processing and other initialization")
 
-    include_boxes = []  # List of bounding boxes - each list entry is a tuple with 4 points - the GPS coordinates of SW and NE i.e. (min lat, min lon, max lat, max lon)
-    exclude_boxes = []  # List of bounding boxes - each list entry is a tuple with 4 points - the GPS coordinates of SW and NE i.e. (min lat, min lon, max lat, max lon)
+    # The following are both lists of bounding boxes - each list entry is a tuple with 4 points - the GPS coordinates
+    # of SW and NE i.e. (min lat, min lon, max lat, max lon)
+    include_boxes = []
+    exclude_boxes = []
     if (args.include is not None) or (args.exclude is not None):
         if args.include is not None:
             for include_info in args.include:
@@ -984,43 +1081,34 @@ if __name__ == "__main__":
                 bbox = CreateBBox(exclude_info)
                 exclude_boxes.append(bbox)
         if args.debug >= 3: print("exclude_boxes={}".format(exclude_boxes))
-    t2 = get_time()
-    if args.profile: print("Decode the include/exclude boxes took {:.6f}s".format(t2 - t1))
+    the_profiler.profile("Decode the include/exclude boxes")
 
     # Read EXIF data - create a DataFrame
-    # DVO HELP - should support reading from mulitple directories - i.e. accumulating in the exif_dict - the following code has a loop - but only the last iteration is used (i.e. that's a bug)
+    # DVO HELP - should support reading from mulitple directories - i.e. accumulating in the exif_dict - the following
+    # code has a loop - but only the last iteration is used (i.e. that's a bug)
     if (args.photosdir is not None) and (len(args.photosdir) >= 1):
+        nested_profiler = SimpleHierarchicalProfiler("Scanning EXIF data from photos")
         jpeg_df = pd.DataFrame()
         for stuff in args.photosdir:
-            t2a = get_time()
             directory_name = stuff[0]
             the_photos_href = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else ""
             the_photos_args_string = stuff[2] if (len(stuff) >= 3) and (stuff[1] is not None) else ""
-            the_photos_args_dict = StringToDict(the_photos_args_string)
+            the_photos_args_dict = string_to_dict(the_photos_args_string)
 
             coord_df = get_EXIF_from_directory(directory_name, the_photos_href, debug=False)
 
             # create dataframe from extracted jpeg/EXIF data
             jpeg_df = pd.concat([jpeg_df, coord_df])
-            t2b = get_time()
-            if args.profile: print(
-                "Reading EXIF data from folder ({}) and creating DataFrame - took {:.6f}s".format(directory_name,
-                                                                                                  t2b - t2a))
+            nested_profiler.profile("Read EXIF data from directory ({}) and created DataFrame".format(directory_name))
         jpeg_df.set_index('filename', inplace=True, drop=False)
+        nested_profiler.end()
 
-    t3 = get_time()
-    if args.profile: print("Reading EXIF data and creating DataFrame - took {:.6f}s".format(t3 - t2))
+    the_profiler.profile("Read EXIF data and created DataFrame")
 
     if (args.correctgps >= 1) or (args.cachecorrections is not None):
         jpeg_df, corrected_count = correct_EXIF_GPS_coordinates(jpeg_df, args.correctgps >= 1, args.cachecorrections)
 
-    t4 = get_time()
-    if (args.correctgps >= 1) and (args.debug >= 1): print(
-        "Corrected {} GPS coordinate{} from image files. Took {:.6f}s".format(corrected_count,
-                                                                              "" if corrected_count == 1 else "s",
-                                                                              t4 - t3))
-
-    t5 = get_time()
+    the_profiler.profile("Corrected {} GPS coordinate from image files.".format(corrected_count))
 
     if args.polygon is not None:
         for stuff in args.polygon:
@@ -1030,15 +1118,14 @@ if __name__ == "__main__":
             popup = stuff[3] if (len(stuff) >= 4) else None
             feature_group = folium.FeatureGroup(name, overlay=True)
             list_of_tracks, first_time = read_gpx_file(filename, include_datetime=False, profile=args.profile)
-            the_args_dict = StringToDict(the_args_string)
+            the_args_dict = string_to_dict(the_args_string)
             for track_pair in list_of_tracks:
                 folium.Polygon(track_pair[1],
                                **the_args_dict,
                                tooltip=name,
                                popup=popup).add_to(feature_group)
             feature_group.add_to(folium_map)
-    t5a = get_time()
-    if args.profile: print("Mapping Polygons took {:.6f}s".format(t5a - t5))
+    the_profiler.profile("Polygons")
 
     if args.lifts is not None:
         for stuff in args.lifts:
@@ -1062,8 +1149,7 @@ if __name__ == "__main__":
                 lifts_df['Lift'], lifts_df['LowerTermLat'], lifts_df['LowerTermLon'], lifts_df['UpperTermLat'],
                 lifts_df['UpperTermLon'])]
 
-    t5b = get_time()
-    if args.profile: print("Lifts took {:.6f}s".format(t5b - t5a))
+    the_profiler.profile("Lifts")
 
     if args.debug >= 2: print("Before dealing with Fixed Routes")
     # Deal with the pre-defined Fixed Routes
@@ -1075,20 +1161,17 @@ if __name__ == "__main__":
             popup = stuff[3] if (len(stuff) >= 4) else None
             feature_group = folium.FeatureGroup(name, overlay=True)
             list_of_tracks, first_time = read_gpx_file(filename, profile=args.profile)
-            the_args_dict = StringToDict(the_args)
+            the_args_dict = string_to_dict(the_args)
             for track_pair in list_of_tracks:
                 folium.PolyLine(track_pair[1],
                                 **the_args_dict,
                                 tooltip=name,
                                 popup=popup).add_to(feature_group)
             feature_group.add_to(folium_map)
-    t6 = get_time()
-    if args.profile: print("Mapping Fixed Routes took {:.6f}s".format(t6 - t5b))
+    the_profiler.profile("Fixed Routes")
 
     photo_group = folium.FeatureGroup("Photographs", control=True, show=True)
     folium_map.add_child(photo_group)
-
-    t7 = get_time()
 
     if round_resolution_degrees != 0.0:
         # https://stackoverflow.com/questions/26133538/round-a-single-column-in-pandas
@@ -1096,7 +1179,8 @@ if __name__ == "__main__":
             jpeg_df.loc[:, 'lat_round'] = jpeg_df['latitude'].apply(
                 lambda value: round(value / round_resolution_degrees) * round_resolution_degrees if (
                         (value is not None) and not math.isnan(value)) else None)
-            # Weird - the above can leave some nan values in the "lat_round" and "lon_round" columns - I tried to debug but didn't make progress. Want to handle here rather than downstream.
+            # Weird - the above can leave some nan values in the "lat_round" and "lon_round" columns - I tried to debug
+            # but didn't make progress. Want to handle here rather than downstream.
             # jpeg_df['lat_round'].replace( { np.nan : None }, inplace=True) # This also doesn't work for me
         if "longitude" in jpeg_df:
             jpeg_df.loc[:, 'lon_round'] = jpeg_df['longitude'].apply(
@@ -1130,23 +1214,21 @@ if __name__ == "__main__":
             except BaseException as e:
                 print("WARNING exception caught in debug code: {}, {}".format(type(e), e))
 
-    t8 = get_time()
-    if args.profile: print("Sorting by latitude and longitude took {:.6f}s".format(t8 - t7))
+    the_profiler.profile("Sorted by latitude and longitude")
 
     dbl_filtered_df = jpeg_df.groupby(["lat_round", "lon_round"])
     for lon_round, thing2 in dbl_filtered_df:
         thing3 = thing2.copy()  # This "fixes" the SettingWithCopyWarning mentioned elsewhere in this file.
-        create_photo_marker(thing3, include_boxes, exclude_boxes, args.showrejections, the_photos_args_dict)
+        create_photo_marker(thing3, include_boxes, exclude_boxes, args.showrejections, the_photos_args_dict, args.checkbox_how)
 
-    t9 = get_time()
-    if args.debug >= 1: print("Grouping by latitude and longitude {:.6f}s".format(t9 - t8))
+    the_profiler.profile("Grouped by latitude and longitude")
 
     for stuff in args.tracks:  # DVO TODO - restructure so that args.tracks can be a list of files and/or of directories (now assumes directories)
-        t9a = get_time()
         pathname = stuff[0] if (len(stuff) >= 1) and (stuff[0] is not None) else ""
         feature_name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else ""
         the_args_string = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
-        the_args_dict = StringToDict(the_args_string)
+        profiler = SimpleHierarchicalProfiler("Loop to read/process GPX for {}".format(pathname))
+        the_args_dict = string_to_dict(the_args_string)
         file_list = [os.path.join(pathname, f) for f in sorted(os.listdir(pathname), reverse=True)] if os.path.isdir(
             pathname) else [pathname]
         tracking_group = folium.FeatureGroup(feature_name, control=True, show=True)
@@ -1163,10 +1245,10 @@ if __name__ == "__main__":
                     print("type(list_of_tracks)={}".format(type(list_of_tracks)))
                     print("list_of_tracks=", list_of_tracks)
 
-                formatted_timestamp = TzHelper.as_local(first_time).strftime("%Y%m%d") if first_time is not None else "Undated"
-                checkbox_datestamps.add(formatted_timestamp)
+                formatted_timestamp = XYZ.submit_checkbox_datetime(first_time)
 
                 for track_tuple in list_of_tracks:
+                    end_to_end_length = calc_end_to_end_length(track_tuple[1])
                     adjusted_list_of_points = remove_excluded_points(track_tuple[1], exclude_boxes, args.showrejections >= 1)
                     polyline = folium.PolyLine(adjusted_list_of_points,
                                                **the_args_dict,
@@ -1177,15 +1259,12 @@ if __name__ == "__main__":
                                                # implies it should), so I'm picking a little-used attribute (dashArray) that is supported and hijacking it.
                                                # Relying on a post-processing step in the generated .html file to change the generated "dashArray" to the desired "className"
                                                # There's another near-identical kluge elsewhere in this file.
-                                               popup=create_track_popup(track_tuple[2], the_label)
+                                               popup=create_track_popup(track_tuple[2], end_to_end_length, the_label)
                                                )
                     polyline.add_to(tracking_group)
         tracking_group.add_to(folium_map)
-        if args.profile: print(
-            "Processing GPX files ({}) and marking routes on map - took {:.6f}s".format(pathname, get_time() - t9a))
-    t10 = get_time()
-    if args.profile and (len(args.tracks) > 1): print(
-        "Processing all GPX fles and marking routes on map - took {:.6f}s".format(t10 - t9))
+        profiler.end()
+    the_profiler.profile("Processed all GPX files and marked routes on map")
 
     if (args.showbbox > 0) and ((args.include is not None) or (args.exclude is not None)):
         bbox_group = folium.FeatureGroup("Bounding Boxes", control=True, show=(args.showbbox == 1))
@@ -1197,25 +1276,25 @@ if __name__ == "__main__":
         for bbox in exclude_boxes:
             the_rectangle = folium.Rectangle([(bbox[0], bbox[1]), (bbox[2], bbox[3])], color="red")
             the_rectangle.add_to(bbox_group)
-    t11 = get_time()
-    if args.profile: print("Decode and draw the include/exclude boxes took {:.6f}s".format(t11 - t10))
+    the_profiler.profile("Decoded and drew the include/exclude boxes")
 
     folium_map.fit_bounds(
         [(Overall_min_latitude, Overall_min_longitude), (Overall_max_latitude, Overall_max_longitude)])
     folium.LayerControl().add_to(folium_map)
-    t12 = get_time()
-    if args.profile: print("fit_bounds() and LayerControl().add_to(...) took {:.6f}s".format(t12 - t11))
+    the_profiler.profile("fit_bounds() and LayerControl().add_to(...)")
 
     # Create the DateTime checkboxes menu
     checkboxes = '<form id="date_menu_form_id" onsubmit="return false;"><fieldset><legend align="center">Date Selector</legend>\n' \
                  + '<table class="image-list-popup"><caption>For Tracks and Photos which are enabled in the Layers menu.</caption>\n'
     cell_count = 0
-    for datestamp in sorted(checkbox_datestamps, reverse=True):
+    for datestamp in sorted(XYZ.checkbox_datestamps, reverse=True):
         cell_count += 1
-        pretty_datestamp = datetime.datetime.strptime(datestamp, "%Y%m%d").strftime("%d-%b-%Y")
+        #pretty_datestamp = datetime.datetime.strptime(datestamp, "%Y%m%d").strftime("%d-%b-%Y")
+        pretty_datestamp = XYZ.go_the_otherway( datestamp, args.checkbox_how )
         if ((cell_count - 1) % 4) == 0:
             checkboxes += "<tr>"
-        checkboxes += '<td><label><input type="checkbox" name="{}" value="{}" checked id="{}" onclick="date_menu_checkbox_toggle({})">{}</label></td>\n'.format(
+        # Using """ for single-line string below - since it needs to contain both " and ' strings.
+        checkboxes += """<td><label><input type="checkbox" name="{}" value="{}" checked id="{}" onclick="date_menu_checkbox_toggle('{}')">{}</label></td>\n""".format(
             datestamp, datestamp, datestamp, datestamp, pretty_datestamp)
         if ((cell_count % 4) == 0):
             checkboxes += "</tr>\n"
@@ -1228,6 +1307,8 @@ if __name__ == "__main__":
     checkboxes += '<tr><td colspan="2"><button id="datestamp_button">Uncheck All</button></td>' \
                   + '<td colspan="2"><button id="toggle_datestamp_button">Toggle All</button></td></tr>\n' \
                   + '</table></fieldset></form>'
+
+    the_profiler.profile("Created check-box Date/Time Menu")
 
     # A lot of pass-through code directly into the output HTML file.
     folium_map.get_root().html.add_child(folium.Element("""
@@ -1336,17 +1417,14 @@ if __name__ == "__main__":
     """.format(checkboxes)))
 
     folium.folium._default_css.append(('leaflet_overloaded_css', 'http://kokanee.mynetgear.com/dvo/hiking_map.css'))
-    t13 = get_time()
-    if args.profile: print(
-        "Creating date/time checkbox menu - and transfering HTML/CSS/Javascript code to {:.6f}s".format(t13 - t12))
+    the_profiler.profile("Transferred HTML/CSS/Javascript code")
 
     for outfile in args.outfile:  # I don't understand: the 2nd output file (if any) may have added a call to remove() the feature-group for the bounding boxes. But the
         # observable effect is that the HTML map starts without any background map selected.
         print("Saving {}".format(outfile))
         folium_map.save(outfile)
-    t14 = get_time()
-    if args.profile: print("Saving {} took {:.6f}s".format(args.outfile, t14 - t13))
-    # webbrowser.open(args.outfile)
-    t15 = get_time()
-    # if args.profile: print("After webbrowser.open({}) took {:.6f}s".format(args.outfile, t15-t14))
-    if args.profile: print("Total execution time: {:.6f}s".format(t15 - time_program_start))
+    the_profiler.profile("Saved files: {}".format( args.outfile))
+    if False:
+        webbrowser.open(args.outfile)
+        the_profiler.profile("After webbrowser.open()")
+
