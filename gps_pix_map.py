@@ -1,3 +1,5 @@
+# Copyright Don Organ 2022
+
 from pathlib import Path
 
 import math
@@ -1039,7 +1041,7 @@ if __name__ == "__main__":
                                  " <file-or-directory> [<args-see-descr>']",
                             nargs="+", action="append", type=str)
 
-    arg_parser.add_argument("-photosdir", "--photosdir", type=str, action="append",
+    arg_parser.add_argument("-photos", "--photos", type=str, action="append",
                             help="Directory to scan for image files: <directory-name>"
                                  " <href-such-as-url> [<args-see-descr>]",
                             nargs="+", default=None)
@@ -1107,7 +1109,7 @@ if __name__ == "__main__":
         print("profile({}): {}".format(type(args.profile), args.profile))
         print("tracks({}): {}".format(type(args.tracks), args.tracks))
         print("outfile({}): {}".format(type(args.outfile), args.outfile))
-        print("photosdir({}): {}".format(type(args.photosdir), args.photosdir))
+        print("photos({}): {}".format(type(args.photos), args.photos))
         print("pm_group({}): {}".format(type(args.pm_group), args.pm_group))
         print("fixed({}): {}".format(type(args.fixed), args.fixed))
         print("polygon({}): {}".format(type(args.polygon), args.polygon))
@@ -1184,10 +1186,10 @@ if __name__ == "__main__":
     folium_map.add_child(photo_group)
 
 
-    if (args.photosdir is not None) and (len(args.photosdir) >= 1):
+    if (args.photos is not None) and (len(args.photos) >= 1):
         nested_profiler = SimpleHierProfiler("Scanning EXIF data from photos")
         jpeg_df = pd.DataFrame()
-        for the_tuple in args.photosdir:
+        for the_tuple in args.photos:
             directory_name = the_tuple[0]
             the_photos_href = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else ""
             the_photos_args_string = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[1] is not None) else ""
@@ -1204,8 +1206,7 @@ if __name__ == "__main__":
 
     if (args.correctgps >= 1) or (args.cachecorrections is not None):
         jpeg_df, corrected_count = correct_EXIF_GPS_coordinates(jpeg_df, args.correctgps >= 1, args.cachecorrections)
-
-    the_profiler.profile("Corrected {} GPS coordinate from image files.".format(corrected_count))
+        the_profiler.profile("Corrected {} GPS coordinate from image files.".format(corrected_count))
 
 
     if round_resolution_degrees != 0.0:
