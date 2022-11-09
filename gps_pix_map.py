@@ -324,7 +324,7 @@ def get_exposure_datetime_from_EXIF(exif_dict, filename=None):
         # Not generating an error here - just move on to the next approach
         filename_datetime = None
     if filename_datetime != None:
-        return filename_datetime  # Succss (variation 5)
+        return filename_datetime  # Success (variation 5)
 
     # Perhaps try using the creation date of the file itself - but I'm concerned on Linux systems it would be the date
     # the file was copied to the computer from the camera
@@ -862,7 +862,7 @@ def meters_to_US(meters):
             return '{:.0f} miles'.format(distance_miles)
 
 
-def create_track_popup(gpx_track_segment, end_to_end_length_meters, name):
+def create_track_popup(gpx_track_segment, end_to_end_length_meters, name, base_filename, the_href):
     length_2d_meters = gpx_track_segment.length_2d()
     length_3d_meters = gpx_track_segment.length_3d()
     uphill_meters, downhill_meters = gpx_track_segment.get_uphill_downhill()
@@ -872,17 +872,21 @@ def create_track_popup(gpx_track_segment, end_to_end_length_meters, name):
     duration_cleaned = datetime.timedelta(seconds=round(duration.total_seconds()))  # Wow! There's no strftime() equivalent for timedelta.
                                                                                     # So just trying to get rid of the microseconds
     trip_type = "round-trip" if end_to_end_length_meters < 500 else "one-way"
-    popup_str = ("<table class='image-list-popup'><caption>{}</caption>\n"
-                 "<tr><th>Distance</th><td>{} {}</td></tr>\n"
-                 "<tr><th>Duration</th><td>{}</td></tr>\n"
-                 "<tr><th>Elevation Range</th><td>{}'..{}'</td></tr>\n"
-                 "<tr><th>Uphill</th><td>{:.0f}'</td></tr>\n"
-                 "<tr><th>Extra 3D length</th><td>{}'</td></tr>\n"
-                 "<tr><th>Date</th><td>{}</td></tr>\n"
-                 "</table>\n".format(
-        name, meters_to_US(length_2d_meters), trip_type, duration_cleaned, round(meters_to_feet(min_elevation)),
-        round(meters_to_feet(max_elevation)),
-        round(meters_to_feet(uphill_meters)), round(meters_to_feet(length_3d_meters-length_2d_meters)), start_time.strftime("%d-%b-%Y")))
+    if (the_href is None) or (len(the_href) == 0):
+        gpx_studio_str = None
+    else:
+        gpx_studio_str = '<a href="https://gpx.studio/?state=%7B%22urls%22:%5B%22{}/{}%22%5D%7D&embed&imperial&distance&direction&slope">gpx.studio</a>'.format( the_href, base_filename)
+
+    popup_str  = "<table class='image-list-popup'><caption>{}</caption>\n".format( name )
+    popup_str += "<tr><th>Date</th><td>{}</td></tr>\n".format(start_time.strftime("%-d-%b-%Y") )
+    popup_str += "<tr><th>Distance</th><td>{} {}</td></tr>\n".format( meters_to_US(length_2d_meters), trip_type )
+    popup_str += "<tr><th>Duration</th><td>{}</td></tr>\n".format( duration_cleaned )
+    popup_str += "<tr><th>Elevation Range</th><td>{}' ({}'..{}')</td></tr>\n".format( round(meters_to_feet(max_elevation)) - round(meters_to_feet(min_elevation)), round(meters_to_feet(min_elevation)), round(meters_to_feet(max_elevation)) )
+    popup_str += "<tr><th>Uphill</th><td>{:.0f}'</td></tr>\n".format( round(meters_to_feet(uphill_meters)) )
+    #popup_str+= "<tr><th>Extra 3D length</th><td>{}'</td></tr>\n".format( round(meters_to_feet(length_3d_meters-length_2d_meters)) )
+    if gpx_studio_str is not None:
+        popup_str += "<tr><th>GPX Map with elevations</th><td>{}</td></tr>\n".format( gpx_studio_str )
+    popup_str += "</table>\n"
     return popup_str
 
 def distance_start_and_end(path):
@@ -891,11 +895,11 @@ def distance_start_and_end(path):
 
 def args_to_poly(the_command_line_arg, the_func):
     if the_command_line_arg is not None:
-        for stuff in the_command_line_arg:
-            filename = stuff[0]
-            name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else os.path.basename(filename)
-            the_args = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
-            popup = stuff[3] if (len(stuff) >= 4) else None
+        for the_tuple in the_command_line_arg:
+            filename = the_tuple[0]
+            name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else os.path.basename(filename)
+            the_args = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
+            popup = the_tuple[3] if (len(the_tuple) >= 4) else None
             feature_group = folium.FeatureGroup(name, overlay=True)
             list_of_tracks, first_time = read_gpx_file(filename, profile=args.profile)
             the_args_dict = string_to_dict(the_args)
@@ -1038,7 +1042,7 @@ if __name__ == "__main__":
 
     arg_parser.add_argument("-tracks", "--tracks",
                             help="location of the GPX file(s) identify hiking tracks (path hiked):"
-                                 " <file-or-directory> [<args-see-descr>']",
+                                 " <file-or-directory> [<href-such-as-url> [<args-see-descr>]]",
                             nargs="+", action="append", type=str)
 
     arg_parser.add_argument("-photos", "--photos", type=str, action="append",
@@ -1099,6 +1103,8 @@ if __name__ == "__main__":
     arg_parser.add_argument("-checkbox_how", "--checkbox_how", type=str, action="store", default="day",
                             help="granularity of the dates in the checkbox menu: should be one of 'year', 'month',"
                                  " 'week', 'day', or 'hour'")
+    arg_parser.add_argument("-css_url", "--css_url", type=str, action="append", nargs=2,
+                            help="A pair of strings - to identify a <css-name> <url> such that the URL identifies a CSS file.")
 
     args = arg_parser.parse_args()
     if args.debug >= 1:
@@ -1121,6 +1127,7 @@ if __name__ == "__main__":
         print("cachecorrections({}): {}".format(type(args.cachecorrections), args.cachecorrections))
         print("lifts({}): {}".format(type(args.lifts), args.lifts))
         print("checkbox_how({}): {}".format(type(args.checkbox_how), args.checkbox_how))
+        print("css_url({}): {}".format(type(args.css_url), args.css_url))
         print("---------------------")
 
     DateTimeCheckboxMgr.set_how(args.checkbox_how)
@@ -1157,10 +1164,10 @@ if __name__ == "__main__":
 
 
     if args.lifts is not None:
-        for stuff in args.lifts:
-            filename = stuff[0]
-            the_name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else "lifts"
-            the_args = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
+        for the_tuple in args.lifts:
+            filename = the_tuple[0]
+            the_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else "lifts"
+            the_args = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
             if os.path.isfile(filename):
                 try:
                     lifts_df = pd.read_csv(filename)
@@ -1236,10 +1243,11 @@ if __name__ == "__main__":
 
     the_profiler.profile("Grouped by latitude and longitude")
 
-    for stuff in args.tracks:
-        pathname = stuff[0] if (len(stuff) >= 1) and (stuff[0] is not None) else ""
-        feature_name = stuff[1] if (len(stuff) >= 2) and (stuff[1] is not None) else ""
-        the_args_string = stuff[2] if (len(stuff) >= 3) and (stuff[2] is not None) else ""
+    for the_tuple in args.tracks:
+        pathname = the_tuple[0] if (len(the_tuple) >= 1) and (the_tuple[0] is not None) else ""
+        the_tracks_href = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else ""
+        feature_name = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
+        the_args_string = the_tuple[3] if (len(the_tuple) >= 4) and (the_tuple[3] is not None) else ""
         profiler = SimpleHierProfiler("Loop to read/process GPX for {}".format(pathname))
         the_args_dict = string_to_dict(the_args_string)
         file_list = [os.path.join(pathname, f) for f in sorted(os.listdir(pathname), reverse=True)] if os.path.isdir(
@@ -1272,7 +1280,7 @@ if __name__ == "__main__":
                                                # implies it should), so I'm picking a little-used attribute (dashArray) that is supported and hijacking it.
                                                # Relying on a post-processing step in the generated .html file to change the generated "dashArray" to the desired "className"
                                                # There's another near-identical kluge elsewhere in this file.
-                                               popup=create_track_popup(track_tuple[2], end_to_end_length, the_label)
+                                               popup=create_track_popup(track_tuple[2], end_to_end_length, the_label,file_part, the_tracks_href)
                                                )
                     OverallBBoxCheck_GPX( track_tuple[2].get_bounds() )
                     polyline.add_to(tracking_group)
@@ -1416,7 +1424,9 @@ if __name__ == "__main__":
 	</script>
     """.format(checkboxes)))
 
-    folium.folium._default_css.append(('leaflet_overloaded_css', 'http://kokanee.mynetgear.com/dvo/hiking_map.css'))
+    if args.css_url is not None:
+        for pair in args.css_url:
+            folium.folium._default_css.append((pair[0], pair[1]))
     the_profiler.profile("Transferred HTML/CSS/Javascript code")
 
     for outfile in args.outfile:  # I don't understand: the 2nd output file (if any) may have added a call to remove()
