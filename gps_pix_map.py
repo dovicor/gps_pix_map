@@ -594,6 +594,8 @@ class DateTimeCheckboxMgr:
                                 # checkbox control, so whatever resolution (year, month-year, day-month-year, etc.) that
                                 # is wanted for that user-control, should be used here.
                                 # See also args.checkbox_how
+    datestamps_to_imagefiles = {} # Dictionary indexed by datestamps. Contents is a set (for each datestamp) identifying the imagefiles.
+                                # I thought I could get these in the browser via getElementsByClassName() - but nope. 
 
     default_format = "day"
     how = default_format
@@ -648,6 +650,13 @@ class DateTimeCheckboxMgr:
         formatted_str = DateTimeCheckboxMgr.get_datetime_checkbox_str(the_datetime, how) if the_datetime is not None else "Undated"
         cls.checkbox_datestamps.add(formatted_str)
         return formatted_str
+
+    @classmethod
+    def submit_imagefile_classname(cls, image_file, formatted_datetime):
+        if not formatted_datetime in cls.datestamps_to_imagefiles:
+            cls.datestamps_to_imagefiles[formatted_datetime] = set()
+        cls.datestamps_to_imagefiles[formatted_datetime].add(image_file)
+
 
     @classmethod
     def set_how(cls, new_how):
@@ -711,10 +720,13 @@ class ImagePopupHelper:
         oriented_width = image_width if orientation < 4 else image_height
         oriented_height = image_height if orientation < 4 else image_width
 
+        formatted_timestamp = DateTimeCheckboxMgr.submit_checkbox_datetime(timestamp)
+        DateTimeCheckboxMgr.submit_imagefile_classname("{}/{}".format(href, base_filename), formatted_timestamp)
+        #DateTimeCheckboxMgr.submit_imagefile_classname("/{}".format(base_filename), formatted_timestamp)
+
         self.popup_str = self.popup_str + self.row_start + \
-                 '<a href="{}/{}" target="_blank" rel="noopener noreferrer">{}</a>{}{}{}{}x{}{}{}{}{}{}{}'.format(
-                     href,
-                     base_filename, base_filename, self.row_mid,
+                 '<a href="{}/{}" class="{}" target="_blank" rel="noopener noreferrer">{}</a>{}{}{}{}x{}{}{}{}{}{}{}'.format(
+                     href, base_filename, formatted_timestamp, base_filename, self.row_mid,
                      lens_type, self.row_mid,
                      oriented_width, oriented_height, self.row_mid,
                      TzHelper.as_local(timestamp).strftime("%-d-%b-%Y"), self.row_mid,
@@ -862,7 +874,8 @@ def meters_to_US(meters):
             return '{:.0f} miles'.format(distance_miles)
 
 
-def create_track_popup(gpx_track_segment, end_to_end_length_meters, name, base_filename, the_href):
+def create_track_popup(gpx_track_segment, end_to_end_length_meters, name, base_filename, the_href, classname):
+    user_strftime_format = "%-d-%b-%Y" # The prefered format (see strftime()) format for the user visible datetime.
     length_2d_meters = gpx_track_segment.length_2d()
     length_3d_meters = gpx_track_segment.length_3d()
     uphill_meters, downhill_meters = gpx_track_segment.get_uphill_downhill()
@@ -877,8 +890,13 @@ def create_track_popup(gpx_track_segment, end_to_end_length_meters, name, base_f
     else:
         gpx_studio_str = '<a href="https://gpx.studio/?state=%7B%22urls%22:%5B%22{}/{}%22%5D%7D&embed&imperial&distance&direction&slope">gpx.studio</a>'.format( the_href, base_filename)
 
+    slideshow_str = None
+    if (classname is not None) and (classname != ""):
+        slideshow_str = """<button class="w3-button w3-display-auto" onclick="toSlideShow('{}')">Slideshow for {}</button>""".format(classname, start_time.strftime(user_strftime_format))
+
+
     popup_str  = "<table class='image-list-popup'><caption>{}</caption>\n".format( name )
-    popup_str += "<tr><th>Date</th><td>{}</td></tr>\n".format(start_time.strftime("%-d-%b-%Y") )
+    popup_str += "<tr><th>Date</th><td>{}</td></tr>\n".format(start_time.strftime(user_strftime_format) )
     popup_str += "<tr><th>Distance</th><td>{} {}</td></tr>\n".format( meters_to_US(length_2d_meters), trip_type )
     popup_str += "<tr><th>Duration</th><td>{}</td></tr>\n".format( duration_cleaned )
     popup_str += "<tr><th>Elevation Range</th><td>{}' ({}'..{}')</td></tr>\n".format( round(meters_to_feet(max_elevation)) - round(meters_to_feet(min_elevation)), round(meters_to_feet(min_elevation)), round(meters_to_feet(max_elevation)) )
@@ -886,6 +904,8 @@ def create_track_popup(gpx_track_segment, end_to_end_length_meters, name, base_f
     #popup_str+= "<tr><th>Extra 3D length</th><td>{}'</td></tr>\n".format( round(meters_to_feet(length_3d_meters-length_2d_meters)) )
     if gpx_studio_str is not None:
         popup_str += "<tr><th>GPX Map with elevations</th><td>{}</td></tr>\n".format( gpx_studio_str )
+    if slideshow_str is not None:
+        popup_str += '<tr><th colspan="2">{}</tr>\n'.format( slideshow_str )
     popup_str += "</table>\n"
     return popup_str
 
@@ -1280,7 +1300,7 @@ if __name__ == "__main__":
                                                # implies it should), so I'm picking a little-used attribute (dashArray) that is supported and hijacking it.
                                                # Relying on a post-processing step in the generated .html file to change the generated "dashArray" to the desired "className"
                                                # There's another near-identical kluge elsewhere in this file.
-                                               popup=create_track_popup(track_tuple[2], end_to_end_length, the_label,file_part, the_tracks_href)
+                                               popup=create_track_popup(track_tuple[2], end_to_end_length, the_label,file_part, the_tracks_href, formatted_timestamp)
                                                )
                     OverallBBoxCheck_GPX( track_tuple[2].get_bounds() )
                     polyline.add_to(tracking_group)
@@ -1324,8 +1344,10 @@ if __name__ == "__main__":
             cell_count += 1
         checkboxes += "</tr>\n"
 
-    checkboxes += '<tr><td colspan="2"><button id="datestamp_button">Uncheck All</button></td>' \
-                  + '<td colspan="2"><button id="toggle_datestamp_button">Toggle All</button></td></tr>\n' \
+    checkboxes += '<tr><td><button id="datestamp_button">Uncheck All</button></td>' \
+                  + '<td><button id="toggle_datestamp_button">Toggle All</button></td>' \
+                  + '<td></td>' \
+                  + '<td><button id="datestamp_slideshow_button">Slide Show</button></td></tr>\n' \
                   + '</table></fieldset></form>'
 
     the_profiler.profile("Created check-box Date/Time Menu")
@@ -1362,6 +1384,7 @@ if __name__ == "__main__":
 	<script>
         ////////////////////////////////
 
+        const slideshow_url = 'https://kokanee.mynetgear.com/dvo/slideshow.html';
         const check_all = "Check All";
         const uncheck_all = "Uncheck All";
         const ds_btn = document.getElementById("datestamp_button");
@@ -1402,7 +1425,7 @@ if __name__ == "__main__":
                         }}
                     }}
                 }});
-        return false;
+            return false;
         }});
 
         function date_menu_checkbox_toggle( classname) {{
@@ -1421,6 +1444,28 @@ if __name__ == "__main__":
                 the_elements[ii].style.setProperty( property_str, value );
             }}
         }}
+
+        const slideshow_button = document.getElementById("datestamp_slideshow_button");
+        slideshow_button.addEventListener('click', () => {{
+                form = document.getElementById('date_menu_form_id');
+                var the_urls_array = [];
+                Array.from(form.elements).sort().reverse()forEach(element => {{
+                    if (element.type === "checkbox") {{
+                        if (element.checked) {{
+                            the_urls_array = the_urls_array.concat( window['ImageArray_' + element.name] );
+                        }}
+                    }}
+                }});
+            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON,stringify( the_urls_array ));
+            window.open( the_location_href, '_blank' );
+            return false;
+        }});
+        function toSlideShow(classname) {{
+            const the_urls_array = the_urls_array.concat( window['ImageArray_' + classname] );
+            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON,stringify( the_urls_array ));
+            window.open( the_location_href, '_blank' );
+        }}
+
 	</script>
     """.format(checkboxes)))
 
