@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<!-- Copyright Don Organ 2022.
+	Supports a slide-show in a browser window. Pass into it a JSON encoded array of
+	URIs for the images. The Javascript function toSlideShow() is not called here,
+	but serves as an example of how this page could be invoked from another
+	HTML page via Javascript.
+	This is not without some problems...
+	1) The above mentioned JSON encoded array in the GET URL is size limited by
+		many web-servers. To large of a URL can result in the dreaded
+			Error code 414: URI too large
+		which can be resolved by increasing a parameter in the web
+		server's configuration (if you have access).
+		An alternative I could investigate would be to use POST,
+		but that would require more server-side support (such as PHP -
+		which again might be a server configuration issue), or some
+		client technique such as cookies (but this limits clients
+		to be on the same machine).
+		https://stackoverflow.com/questions/1409013/how-to-read-the-post-request-parameters-using-javascript	
+	2) There is some pre-loading to attempt to improve the performance
+		in the eyes of the user. This likely could be improved.
+	3) Parameterization -such as slideshow speed (time between slides)>
+	4) stylization - as a borders, spacing - during resizing, colors,
+		changing button icons (such as to a pause) once the
+		slide-show is self-running.
+	5) Information - such as date/time, location from EXIF, copyright
+		display.
+-->
+<html>
+        <head>
+		<title>Slideshow</title>
+	<style>
+	#controlbar {
+		display: flex;
+		flex-direction: row;
+		flex-wrap: nowrap;
+		justify-content: center;
+		align-items: center;
+		gap: 10px;
+		width: 100%
+	}
+	#container_for_images_div {
+		-webkit-background-size: contain;
+		-moz-background-size: contain;
+		-o-background-size: contain;
+		background-size: contain;
+		background-position: center;
+		background-repeat: no-repeat;
+		height: 90vh;
+	}
+	body {
+		padding: 0;
+		margin: 0;
+		background-position: center;
+		background-repeat: no-repeat;
+	}
+	</style>
+	<script type="text/javascript">
+	"use strict";
+
+	var img_urls = 0; // Once URL is decoded, this will be the array of image-file URLs
+	const urlParams = new URLSearchParams(window.location.search);
+	for (const [key, value] of urlParams) { 
+		if (key == "image_files") {
+			img_urls = JSON.parse( value );
+		}
+	}
+
+	if (img_urls == 0) { 
+		alert("Warning: Expected to receive a JSON array of image-file URIs with the key 'image_files' in the URL");
+	} else {
+		window.onload = (function() { reset(); } );
+	}
+
+	var slideIndex = -1;
+	var timeoutID = 0;
+	function reset() {
+		slideIndex = -1;
+		clearTimeout(timeoutID);
+		timeoutID = 0;
+		showImage(+1, 8000);
+	}
+	function getLegalIndex(candidate_index, the_array) {
+		if (candidate_index >= the_array.length) {candidate_index = 0}
+		if (candidate_index < 0) {candidate_index = the_array.length-1} ;
+		return candidate_index;
+	}
+	function preload( the_url, the_variable ) {
+		var preloaded = new Image(); // From a C++ perspective - this seemingly should be a memory leak. But apparently not.
+		preloaded.src = the_url;
+	}
+	function showImage(increment, timeout) {
+		slideIndex = getLegalIndex( slideIndex + increment, img_urls );
+		document.getElementById("container_for_images_div").style.backgroundImage= 'url(' + img_urls[slideIndex] + ')';
+		const index_plus_1 = slideIndex+1;
+		document.getElementById("controlbar_between_arrows").innerText = img_urls[slideIndex].split('/').reverse()[0] + ' ' + index_plus_1.toString() + ' of ' + img_urls.length.toString();
+		preload( img_urls[ getLegalIndex(slideIndex+1, img_urls) ] );
+		if (timeoutID != 0) {
+			clearTimeout(timeoutID);
+			timeoutID = 0;
+		}
+		if (timeout != 0) {
+			timeoutID = setTimeout(showImage, timeout, increment, timeout );
+		}
+
+	}
+	function toSlideShow(classname) {
+		const test_urls = [
+			"/somedir/image-1.jpg",
+			"/somedir/image-2.jpg",
+			"/somedir/image-3.jpg"
+                ];
+            var img_urls_json = JSON.stringify( test_urls );
+            var uri_component = encodeURIComponent( img_urls_json );
+            var the_location_href = 'https://yourwebsitegoeshere.com/slideshow.html?image_files=' + uri_component;
+            console.log("the_location_href=", the_location_href );
+            location.href = the_location_href;
+        }
+	</script>
+	</head>
+        <body>
+		<div id="controlbar">
+			<button onclick="reset()">&#8676;</button>
+			<button onclick="showImage(-1, 8000)">&#8672;</button>
+			<button onclick="showImage(-1,0)">&#10096;</button>
+			<p id="controlbar_between_arrows">Filename goes here.</p>
+			<button onclick="showImage(+1,0)">&#10097;</button>
+			<button onclick="showImage(+1, 8000)">&#8674;</button>
+		</div>
+		<div id="container_for_images_div"></div>
+
+	</body>
+</html>
+
