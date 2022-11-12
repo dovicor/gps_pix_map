@@ -1464,7 +1464,10 @@ if __name__ == "__main__":
                 Array.from(form.elements).sort().reverse().forEach(element => {{
                     if (element.type === "checkbox") {{
                         if (element.checked) {{
-                            the_urls_array = the_urls_array.concat( window['ImageArray_' + element.name] );
+                            const next_array = window['ImageArray_' + element.name];
+                            if (Array.isArray(next_array) && (next_array.length != 0)) {{
+                                the_urls_array = the_urls_array.concat( next_array );
+                            }}
                         }}
                     }}
                 }});
