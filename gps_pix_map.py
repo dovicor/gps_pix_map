@@ -1352,6 +1352,16 @@ if __name__ == "__main__":
 
     the_profiler.profile("Created check-box Date/Time Menu")
 
+    ########################################################
+    # Create arrays of imagefiles
+    the_big_string = ""
+    for timestamp in sorted(DateTimeCheckboxMgr.datestamps_to_imagefiles):
+        the_big_string += 'var ImageArray_{} = [\n'.format( timestamp )
+        for fname in sorted(DateTimeCheckboxMgr.datestamps_to_imagefiles[ timestamp ]):
+            the_big_string += '\t"{}",\n'.format( fname )
+        the_big_string += "\t];\n"
+
+
     # A lot of pass-through code directly into the output HTML file.
     folium_map.get_root().html.add_child(folium.Element("""
 <style>
@@ -1445,29 +1455,31 @@ if __name__ == "__main__":
             }}
         }}
 
+        {}
+
         const slideshow_button = document.getElementById("datestamp_slideshow_button");
         slideshow_button.addEventListener('click', () => {{
                 form = document.getElementById('date_menu_form_id');
                 var the_urls_array = [];
-                Array.from(form.elements).sort().reverse()forEach(element => {{
+                Array.from(form.elements).sort().reverse().forEach(element => {{
                     if (element.type === "checkbox") {{
                         if (element.checked) {{
                             the_urls_array = the_urls_array.concat( window['ImageArray_' + element.name] );
                         }}
                     }}
                 }});
-            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON,stringify( the_urls_array ));
+            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
             window.open( the_location_href, '_blank' );
             return false;
         }});
         function toSlideShow(classname) {{
-            const the_urls_array = the_urls_array.concat( window['ImageArray_' + classname] );
-            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON,stringify( the_urls_array ));
+            const the_urls_array = window['ImageArray_' + classname];
+            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
             window.open( the_location_href, '_blank' );
         }}
 
 	</script>
-    """.format(checkboxes)))
+    """.format(checkboxes, the_big_string)))
 
     if args.css_url is not None:
         for pair in args.css_url:
