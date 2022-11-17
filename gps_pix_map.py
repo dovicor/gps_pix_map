@@ -1126,6 +1126,13 @@ if __name__ == "__main__":
     arg_parser.add_argument("-css_url", "--css_url", type=str, action="append", nargs=2,
                             help="A pair of strings - to identify a <css-name> <url> such that the URL identifies a CSS file.")
 
+    arg_parser.add_argument("-slideshow", "--slideshow", type=str, action="store", nargs='?', const="https://kokanee.mynetgear.com/dvo/slideshow.html",
+                            help="URL for slideshow (files passed via GET arguments")
+    arg_parser.add_argument("-ss_url_prefix", "--ss_url_prefix", type=str, action="store",
+                            help="Argument passed to the slideshow to send to the image-server via GET arguments")
+    arg_parser.add_argument("-ss_pace", "--ss_pace", type=int, action="store", default=6000,
+                            help="Slide-show auto-advance rate - in milliseconds (1000=1 second)")
+
     args = arg_parser.parse_args()
     if args.debug >= 1:
         print("folium version={}".format(folium.__version__))
@@ -1148,6 +1155,9 @@ if __name__ == "__main__":
         print("lifts({}): {}".format(type(args.lifts), args.lifts))
         print("checkbox_how({}): {}".format(type(args.checkbox_how), args.checkbox_how))
         print("css_url({}): {}".format(type(args.css_url), args.css_url))
+        print("slideshow({}): {}".format(type(args.slideshow), args.slideshow))
+        print("ss_url_prefix({}): {}".format(type(args.ss_url_prefix), args.ss_url_prefix))
+        print("ss_pace({}): {}".format(type(args.ss_pace), args.ss_pace))
         print("---------------------")
 
     DateTimeCheckboxMgr.set_how(args.checkbox_how)
@@ -1358,7 +1368,8 @@ if __name__ == "__main__":
     for timestamp in sorted(DateTimeCheckboxMgr.datestamps_to_imagefiles):
         the_big_string += 'var ImageArray_{} = [\n'.format( timestamp )
         for fname in sorted(DateTimeCheckboxMgr.datestamps_to_imagefiles[ timestamp ]):
-            the_big_string += '\t"{}",\n'.format( fname )
+            #the_big_string += '\t"{}",\n'.format( fname )
+            the_big_string += '\t"{}",\n'.format( os.path.basename(fname) )
         the_big_string += "\t];\n"
 
 
@@ -1394,7 +1405,7 @@ if __name__ == "__main__":
 	<script>
         ////////////////////////////////
 
-        const slideshow_url = 'https://kokanee.mynetgear.com/dvo/slideshow.html';
+        const slideshow_url = '{}';
         const check_all = "Check All";
         const uncheck_all = "Uncheck All";
         const ds_btn = document.getElementById("datestamp_button");
@@ -1471,7 +1482,17 @@ if __name__ == "__main__":
                         }}
                     }}
                 }});
-            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
+            var width_array = [ 160, 240, 320, 480, 640, 960, 1280, 1920 ];
+            //var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
+            //var the_location_href = slideshow_url + '?sendwidth=' + encodeURIComponent(JSON.stringify(1)) + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
+            //var the_location_href = slideshow_url + '?sendwidth=1&image_files=' + JSON.stringify( the_urls_array) );
+            //var the_location_href = encodeURIComponent( slideshow_url + '?sendwidth=1&image_files=' + JSON.stringify( the_urls_array) );
+            //var the_location_href = slideshow_url + '?sendwidth=1&image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ) );
+            var the_location_href = slideshow_url +
+                            '?pace=' + encodeURIComponent( "{}" ) + \
+                            '&prefix=' + encodeURIComponent( "{}" ) + \
+                            '&sendwidth=' + encodeURIComponent( JSON.stringify( width_array ) ) + \
+                            '&image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ) );
             window.open( the_location_href, '_blank' );
             return false;
         }});
@@ -1482,7 +1503,7 @@ if __name__ == "__main__":
         }}
 
 	</script>
-    """.format(checkboxes, the_big_string)))
+    """.format(checkboxes, args.slideshow, the_big_string, args.ss_pace, args.ss_url_prefix)))
 
     if args.css_url is not None:
         for pair in args.css_url:
