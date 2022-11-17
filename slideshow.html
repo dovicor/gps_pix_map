@@ -38,6 +38,14 @@
 		gap: 10px;
 		width: 100%
 	}
+	.responsive_image {
+		/*width: 100%;*/
+		max-width: 100%;
+		max-height: 100%;
+		/*height: auto;*/
+		display: block;
+		image-orientation: from-image;
+	}
 	#container_for_images_div {
 		-webkit-background-size: contain;
 		-moz-background-size: contain;
@@ -46,6 +54,9 @@
 		background-position: center;
 		background-repeat: no-repeat;
 		height: 90vh;
+	}
+	html {
+		margin: 0;
 	}
 	body {
 		padding: 0;
@@ -58,12 +69,32 @@
 	"use strict";
 
 	var img_urls = 0; // Once URL is decoded, this will be the array of image-file URLs
+	var send_width_array = []; // Option for the URL to the image-server
+	var url_prefix = ""; // Optional - for the URL generated to the image-server
+	var pace = 6000; // Slide-show rate when in auto-advance - in milliseconds per image
+	console.log("Before URLSearchParams decode");
 	const urlParams = new URLSearchParams(window.location.search);
-	for (const [key, value] of urlParams) { 
-		if (key == "image_files") {
-			img_urls = JSON.parse( value );
-		}
+	if (urlParams.has('sendwidth')) {
+		send_width_array = JSON.parse( urlParams.get('sendwidth') );
+		console.log("key=sendwidth", ", value=", urlParams.get('sendwidth'));
+		console.log("send_width_array.length=", send_width_array.length);
+		console.log('send_width_array=', send_width_array);
 	}
+	if (urlParams.has('pace')) {
+		console.log('Found key pace');
+		pace = urlParams.get('pace');
+		console.log("pace=", pace);
+	}
+	if (urlParams.has('prefix')) {
+		console.log('Found key prefix');
+		url_prefix = urlParams.get('prefix');
+		console.log("url_prefix=", url_prefix);
+	}
+	if (urlParams.has('image_files')) {
+		console.log('Found key image_files');
+		img_urls = JSON.parse( urlParams.get('image_files') );
+	}
+	console.log("After URLSearchParams decode");
 
 	if (img_urls == 0) { 
 		alert("Warning: Expected to receive a JSON array of image-file URIs with the key 'image_files' in the URL");
@@ -77,7 +108,7 @@
 		slideIndex = -1;
 		clearTimeout(timeoutID);
 		timeoutID = 0;
-		showImage(+1, 8000);
+		showImage(+1, pace);
 	}
 	function getLegalIndex(candidate_index, the_array) {
 		if (candidate_index >= the_array.length) {candidate_index = 0}
@@ -88,12 +119,37 @@
 		var preloaded = new Image(); // From a C++ perspective - this seemingly should be a memory leak. But apparently not.
 		preloaded.src = the_url;
 	}
-	function showImage(increment, timeout) {
+	function showImage(increment, timeout=pace) {
 		slideIndex = getLegalIndex( slideIndex + increment, img_urls );
-		document.getElementById("container_for_images_div").style.backgroundImage= 'url(' + img_urls[slideIndex] + ')';
+		//document.getElementById("container_for_images_div").style.backgroundImage= 'url(' + img_urls[slideIndex] + ')';
+		console.log("img_urls[", slideIndex, "]=", img_urls[slideIndex] );
+		console.log("Previous.scr=", document.getElementById("responsive_image_id").src );
+		console.log("class=", document.getElementById("responsive_image_id").className );
+		var my_base_url = window.location.origin + window.location.pathname; // to get rid of parameters
+		console.log("my_base_url=", my_base_url );
+		console.log('send_width_array.length=', send_width_array.length );
+		if (send_width_array.length > 0) {
+			var without_filename2 = my_base_url.substring( 0, my_base_url.lastIndexOf('/')+1);
+			var viewportWidth = window.innerWidth;
+			var width_index = send_width_array.findIndex( function(element) { return element > viewportWidth; } );
+			var target_width = (width_index >= 0) ? send_width_array[width_index] : send_width_array[ send_width_array.length -1];
+			console.log('without_filename2=', without_filename2);
+			console.log('viewportWidth=', viewportWidth);
+			console.log('width_index=', width_index);
+			console.log('target_width=', target_width);
+			console.log('url_prefix=', url_prefix);
+			var rebuilt = url_prefix + "/" + target_width + "/" + img_urls[slideIndex];
+			console.log('rebuilt=', rebuilt);
+			console.log('class=', document.getElementById("responsive_image_id").className);
+			//document.getElementById("responsive_image_id").src= without_filename2 + img_urls[slideIndex];
+			document.getElementById("responsive_image_id").src= rebuilt;
+		} else {
+			document.getElementById("responsive_image_id").src= img_urls[slideIndex];
+		}
+		console.log("After setting=", document.getElementById("responsive_image_id").src );
 		const index_plus_1 = slideIndex+1;
 		document.getElementById("controlbar_between_arrows").innerText = img_urls[slideIndex].split('/').reverse()[0] + ' ' + index_plus_1.toString() + ' of ' + img_urls.length.toString();
-		preload( img_urls[ getLegalIndex(slideIndex+1, img_urls) ] );
+		//preload( img_urls[ getLegalIndex(slideIndex+1, img_urls) ] );
 		if (timeoutID != 0) {
 			clearTimeout(timeoutID);
 			timeoutID = 0;
@@ -119,13 +175,16 @@
         <body>
 		<div id="controlbar">
 			<button onclick="reset()">&#8676;</button>
-			<button onclick="showImage(-1, 8000)">&#8672;</button>
+			<button onclick="showImage(-1)">&#8672;</button>
 			<button onclick="showImage(-1,0)">&#10096;</button>
 			<p id="controlbar_between_arrows">Filename goes here.</p>
 			<button onclick="showImage(+1,0)">&#10097;</button>
-			<button onclick="showImage(+1, 8000)">&#8674;</button>
+			<button onclick="showImage(+1)">&#8674;</button>
 		</div>
-		<div id="container_for_images_div"></div>
+		<div id="container_for_images_div">
+			<img src="" alt="alt" id="responsive_image_id" class="responsive_image"
+			>
+		</div>
 
 	</body>
 </html>
