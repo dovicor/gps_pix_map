@@ -1468,6 +1468,15 @@ if __name__ == "__main__":
 
         {}
 
+        function createSlideShowURL(the_urls_array) {{
+            var width_array = [ 160, 240, 320, 480, 640, 960, 1280, 1920 ];
+            var the_location_href = slideshow_url +
+                            '?pace=' + encodeURIComponent( "{}" ) + \
+                            '&prefix=' + encodeURIComponent( "{}" ) + \
+                            '&sendwidth=' + encodeURIComponent( JSON.stringify( width_array ) ) + \
+                            '&image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ) );
+            return the_location_href;
+        }}
         const slideshow_button = document.getElementById("datestamp_slideshow_button");
         slideshow_button.addEventListener('click', () => {{
                 form = document.getElementById('date_menu_form_id');
@@ -1482,23 +1491,13 @@ if __name__ == "__main__":
                         }}
                     }}
                 }});
-            var width_array = [ 160, 240, 320, 480, 640, 960, 1280, 1920 ];
-            //var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
-            //var the_location_href = slideshow_url + '?sendwidth=' + encodeURIComponent(JSON.stringify(1)) + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
-            //var the_location_href = slideshow_url + '?sendwidth=1&image_files=' + JSON.stringify( the_urls_array) );
-            //var the_location_href = encodeURIComponent( slideshow_url + '?sendwidth=1&image_files=' + JSON.stringify( the_urls_array) );
-            //var the_location_href = slideshow_url + '?sendwidth=1&image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ) );
-            var the_location_href = slideshow_url +
-                            '?pace=' + encodeURIComponent( "{}" ) + \
-                            '&prefix=' + encodeURIComponent( "{}" ) + \
-                            '&sendwidth=' + encodeURIComponent( JSON.stringify( width_array ) ) + \
-                            '&image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ) );
+            var the_location_href = createSlideShowURL(the_urls_array);
             window.open( the_location_href, '_blank' );
             return false;
         }});
         function toSlideShow(classname) {{
             const the_urls_array = window['ImageArray_' + classname];
-            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
+            var the_location_href = createSlideShowURL(the_urls_array);
             window.open( the_location_href, '_blank' );
         }}
 
