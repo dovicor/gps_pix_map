@@ -1189,36 +1189,6 @@ if __name__ == "__main__":
             exclude_boxes.append( CreateBBox(exclude_info) )
     the_profiler.profile("Decode the include/exclude boxes")
 
-    args_to_poly(args.polygon, folium.Polygon)
-    the_profiler.profile("Polygons")
-
-
-    if args.lifts is not None:
-        for the_tuple in args.lifts:
-            filename = the_tuple[0]
-            the_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else "lifts"
-            the_args = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
-            if os.path.isfile(filename):
-                try:
-                    lifts_df = pd.read_csv(filename)
-                except IOError as ee:
-                    print("ERROR: error while attempting to read {}: {}".format(filename, ee))
-                    exit(1)
-            else:
-                print("ERROR: File not found: {}".format(filename))
-                exit(1)
-            lifts = LiftHelper(the_name, the_args)
-            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon) \
-             for liftname, lower_lat, lower_lon, upper_lat, upper_lon in zip(
-                lifts_df['Lift'], lifts_df['LowerTermLat'], lifts_df['LowerTermLon'], lifts_df['UpperTermLat'],
-                lifts_df['UpperTermLon'])
-             ]
-    the_profiler.profile("Lifts")
-
-
-    args_to_poly(args.fixed, folium.PolyLine)
-    the_profiler.profile("Fixed Routes")
-
     photo_group = folium.FeatureGroup("Photographs", control=True, show=True)
     folium_map.add_child(photo_group)
 
@@ -1317,6 +1287,36 @@ if __name__ == "__main__":
         tracking_group.add_to(folium_map)
         profiler.end()
     the_profiler.profile("Processed all GPX files and marked routes on map")
+
+    args_to_poly(args.polygon, folium.Polygon)
+    the_profiler.profile("Polygons")
+
+
+    if args.lifts is not None:
+        for the_tuple in args.lifts:
+            filename = the_tuple[0]
+            the_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else "lifts"
+            the_args = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
+            if os.path.isfile(filename):
+                try:
+                    lifts_df = pd.read_csv(filename)
+                except IOError as ee:
+                    print("ERROR: error while attempting to read {}: {}".format(filename, ee))
+                    exit(1)
+            else:
+                print("ERROR: File not found: {}".format(filename))
+                exit(1)
+            lifts = LiftHelper(the_name, the_args)
+            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon) \
+             for liftname, lower_lat, lower_lon, upper_lat, upper_lon in zip(
+                lifts_df['Lift'], lifts_df['LowerTermLat'], lifts_df['LowerTermLon'], lifts_df['UpperTermLat'],
+                lifts_df['UpperTermLon'])
+             ]
+    the_profiler.profile("Lifts")
+
+
+    args_to_poly(args.fixed, folium.PolyLine)
+    the_profiler.profile("Fixed Routes")
 
     if (args.showbbox > 0) and ((args.include is not None) or (args.exclude is not None)):
         bbox_group = folium.FeatureGroup("Bounding Boxes", control=True, show=(args.showbbox == 1))
