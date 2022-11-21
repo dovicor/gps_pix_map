@@ -845,8 +845,13 @@ class LiftHelper:
         self.feature_group = folium.FeatureGroup(name, overlay=True)
         self.feature_group.add_to(folium_map)
 
-    def AddSkiLift(self, liftname, lower_lat, lower_lon, upper_lat, upper_lon):
-        folium.PolyLine([(lower_lat, lower_lon), (upper_lat, upper_lon)],
+    def AddSkiLift(self, liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon):
+        if (not math.isnan(turn_lat)) and (turn_lat != lower_lat) and (not math.isnan(turn_lon) ) and (turn_lon != lower_lon): # Ala Vista T-bar at Kirkwood
+            folium.PolyLine([(lower_lat, lower_lon), (turn_lat, turn_lon), (upper_lat, upper_lon)],
+                        **self.the_args_dict
+                        ).add_to(self.feature_group)
+        else:
+            folium.PolyLine([(lower_lat, lower_lon), (upper_lat, upper_lon)],
                         **self.the_args_dict
                         ).add_to(self.feature_group)
 
@@ -1019,6 +1024,9 @@ if __name__ == "__main__":
                             -lifts are little more than lines - identified by
                                 the two latitude,longitude of each of the two
                                 end-points. These are loaded from a CSV file.
+                                Note: there is a supported special case where
+                                there is a turn in the lift (see Vista T-Bar
+                                at Kirkwood for an example).
                         -include and -exclude help to filter the input data,
                             both for efficiency and for privacy. Anvimage-
                             marker or a point in a -tracks will NOT be
@@ -1088,7 +1096,8 @@ if __name__ == "__main__":
     arg_parser.add_argument("-lifts", "--lifts", type=str,
                             help="CSV file identifying GPS coordinates of lower and upper terminals of ski-lifts. CSV"
                                 " headers should be: Lift,LowerTermLat,LowerTermLon,UpperTermLat,UpperTermLon."
-                                " Positional command-line arguments are <csv-filename> [args-see-descr>]",
+                                " Positional command-line arguments are <csv-filename> [<args-see-descr>]"
+                                " Note, rarely used, but TurnLat and TurnLon are optional column headers.",
                             nargs="+", action='append')
 
     arg_parser.add_argument("-include", "--include", type=float,
@@ -1307,10 +1316,16 @@ if __name__ == "__main__":
                 print("ERROR: File not found: {}".format(filename))
                 exit(1)
             lifts = LiftHelper(the_name, the_args)
-            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon) \
-             for liftname, lower_lat, lower_lon, upper_lat, upper_lon in zip(
-                lifts_df['Lift'], lifts_df['LowerTermLat'], lifts_df['LowerTermLon'], lifts_df['UpperTermLat'],
-                lifts_df['UpperTermLon'])
+            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon) \
+             for liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon in zip(
+                lifts_df['Lift'],
+                lifts_df['LowerTermLat'], lifts_df['LowerTermLon'],
+                lifts_df['UpperTermLat'], lifts_df['UpperTermLon'],
+                # TODO - reconsider implementation of the following line. The TurnLat and TurnLon columns are optional
+                # in the DataFrame. So I'd like to return the value in that column if it exists, but return NaN otherwise.
+                # But I couldn't figure out how to do that. Note that nan is returned for empty cells.
+                lifts_df['TurnLat'] if 'TurnLat' in lifts_df.columns else lifts_df['LowerTermLat'], lifts_df['TurnLon'] if 'TurnLon' in lifts_df.columns else lifts_df['LowerTermLon']
+                )
              ]
     the_profiler.profile("Lifts")
 
