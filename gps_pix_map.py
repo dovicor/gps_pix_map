@@ -18,7 +18,12 @@ from datetime import timezone
 
 from PIL import Image as PilImage
 
+import shapely.geometry
 
+skilift_distanceA_meters = 20.0 # Must be closer to this to the embark terminal to evaluate whether on lift
+skilift_distanceB_degress = 0.000100 # limit distance from the lift in degrees latitude/longitude (and this
+                        # is not accurate or consistent - doesn't account for degrees latitude being smaller
+                        # further from the equator)
 def string_to_dict(the_string):
     """the_string should resemble "{key1: value1, key2: value2}" or "key1: value1, key2: value2"
     Allows the user to pass in, via command line arguments, arbitrary arguments to be passed
@@ -471,11 +476,15 @@ def rows_with_identical_values_for_indicated_columns2(df: pd.DataFrame, column_h
 
 
 def read_gpx_file(filename: Path, include_datetime=False, profile: bool = False):  # returns a list of tracks
-    profiler = SimpleHierProfiler("read_gpx_file({}".format(filename))
+    profiler = SimpleHierProfiler("read_gpx_file(filename={}, include_datetime={}, profile={})".format(filename, include_datetime, profile))
 
-    # Get EXIF info
     with open(filename, 'r') as gpx_file:
         gpx = gpxpy.parse(gpx_file)
+
+    if False:
+        zzz2( gpx )
+
+
     # Make a list of list of tuples. Each tuple is a point. The list of points is a path (for one track). The list of
     # paths (covering all tracks) is what gets returned.
     # Question - should each segment be a separate line? If so, need to add another level of nesting of the lists
@@ -636,7 +645,7 @@ class DateTimeCheckboxMgr:
             the_tuple = cls.format_map[how]
         else:
             the_tuple = cls.format_map[cls.default_format]
-        if the_tuple[1] != "":
+        if (the_tuple[1] != "") and (formatted_datetime_str != "Undated"):
             reformatted_datestamp = datetime.datetime.strptime(formatted_datetime_str, the_tuple[0]).strftime(the_tuple[1])
         else:
             reformatted_datestamp = formatted_datetime_str # No need to decode and re-encode
@@ -821,7 +830,7 @@ def correct_EXIF_GPS_coordinates(jpeg_df, calculate_gps_corrections, cache_file)
     if calculate_gps_corrections:
         # This is a relatively slow operation - reading lots of GPX files and attempting to find GPS coordinates at
         # the same date/time as EXIF's exposure time
-        jpeg_df3, corrected_count = attempt_to_recover_GPS_coords_in_images(jpeg_df2, args.tracks, args.debug,
+        jpeg_df3, corrected_count = attempt_to_recover_GPS_coords_in_images(jpeg_df2, args.tracks, args.debug, # TODO? add args.skitracks to args.tracks?
                                                                             show_changes=(args.correctgps >= 2))
         # jpeg_df3 contains the corrections found from the GPX files.
     else:
@@ -837,18 +846,6 @@ def correct_EXIF_GPS_coordinates(jpeg_df, calculate_gps_corrections, cache_file)
         jpeg_df.update(cache_df)  # Update the original with the corrections
     return jpeg_df, corrected_count
 
-
-class LiftHelper:
-    def __init__(self, name, the_args):
-        self.name = name
-        self.the_args_dict = string_to_dict(the_args)
-        self.feature_group = folium.FeatureGroup(name, overlay=True)
-        self.feature_group.add_to(folium_map)
-
-    def AddSkiLift(self, liftname, lower_lat, lower_lon, upper_lat, upper_lon):
-        folium.PolyLine([(lower_lat, lower_lon), (upper_lat, upper_lon)],
-                        **self.the_args_dict
-                        ).add_to(self.feature_group)
 
 
 def meters_to_feet(meters):
@@ -909,6 +906,50 @@ def create_track_popup(gpx_track_segment, end_to_end_length_meters, name, base_f
     popup_str += "</table>\n"
     return popup_str
 
+
+def create_track_popup2(list_of_points, track_type, name, classname):
+    user_strftime_format = "%-d-%b-%Y" # The preferred format (see strftime()) format for the user visible datetime.
+    distance_2d_meters = list_of_points[0].distance_2d( list_of_points[-1] )
+    #distance_3d_meters = list_of_points[0].distance_3d( list_of_points[-1] )
+    if False:
+        print("create_track_popup2() type(list_of_points): {}".format(type(list_of_points)))
+        print("create_track_popup2() type(list_of_points[0]): {}".format(type(list_of_points[0])))
+        print("create_track_popup2() list_of_points[0]: {}".format(list_of_points[0]))
+        print("create_track_popup2() list_of_points[-1]: {}".format(list_of_points[-1]))
+    downhill_meters = list_of_points[0].elevation - list_of_points[-1].elevation if (list_of_points[0].elevation is not None) and (list_of_points[-1].elevation is not None) else None
+    start_time = list_of_points[0].time
+    end_time = list_of_points[-1].time
+    first_point_name = list_of_points[0].name
+    last_point_name = list_of_points[-1].name
+    duration = end_time - start_time if (end_time is not None) and (start_time is not None) else None
+    duration_cleaned = datetime.timedelta(seconds=round(duration.total_seconds())) if (duration is not None) else None
+            # Wow! There's no strftime() equivalent for timedelta.
+            # So just trying to get rid of the microseconds
+    speed_feet_p_sec = None
+    if (duration is not None) and (duration.total_seconds() > 0):
+        speed_feet_p_sec = meters_to_feet(distance_2d_meters) / duration.total_seconds()
+    slope_degrees = math.degrees( math.atan2( downhill_meters, distance_2d_meters )) if downhill_meters is not None else None
+
+    local_time = TzHelper.as_local( start_time ) if start_time is not None else None
+    popup_str  = "<table class='image-list-popup'><caption>{} {}</caption>\n".format( track_type, name )
+    popup_str += "<tr><th>Points</th><td>{}..{}</td></tr>\n".format( first_point_name, last_point_name )
+    if local_time is not None:
+        popup_str += "<tr><th>Date & Time</th><td>{} {}</td></tr>\n".format(local_time.strftime(user_strftime_format), local_time.strftime("0%I:%M %p") )
+    popup_str += "<tr><th>Distance</th><td>{}</td></tr>\n".format( meters_to_US(distance_2d_meters) )
+    if duration_cleaned is not None:
+        popup_str += "<tr><th>Duration</th><td>{}</td></tr>\n".format( duration_cleaned )
+    if speed_feet_p_sec is not None:
+        popup_str += "<tr><th>Speed</th><td>{:.1f} feet/sec</td></tr>\n".format( speed_feet_p_sec )
+    if downhill_meters is not None:
+        if downhill_meters > 0:
+            popup_str += "<tr><th>Downhill</th><td>{:.0f}'</td></tr>\n".format( round(meters_to_feet(downhill_meters)) )
+        else:
+            popup_str += "<tr><th>Uphill</th><td>{:.0f}'</td></tr>\n".format( round(meters_to_feet(-1*downhill_meters)) )
+    if slope_degrees is not None:
+        popup_str += "<tr><th>Average Slope</th><td>{:.1f} degrees</td></tr>\n".format( slope_degrees )
+    popup_str += "</table>\n"
+    return popup_str
+
 def distance_start_and_end(path):
     # The distance between the two endpoints - so NOT the length of the path.
     return gpxpy.geo.distance( path[0][0], path[0][1], None, path[-1][0], path[-1][1], None )
@@ -929,6 +970,721 @@ def args_to_poly(the_command_line_arg, the_func):
                          tooltip=name,
                          popup=popup).add_to(feature_group)
             feature_group.add_to(folium_map)
+
+######################################################################################
+######################################################################################
+######################################################################################
+######################################################################################
+######################################################################################
+######################################################################################
+######################################################################################
+
+
+class LiftHelper: # To plot the lifts on a Map as PolyLines
+    def __init__(self, name, the_args):
+        self.name = name
+        self.the_args_dict = string_to_dict(the_args)
+        self.feature_group = folium.FeatureGroup(name, overlay=True)
+        self.feature_group.add_to(folium_map)
+
+    def AddSkiLift(self, liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon):
+        #print("Enter AddSkiLift(...,liftname={}, lower=({},{}), upper=({},{}), turn=({},{}) )".format(liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon))
+        if (not math.isnan(turn_lat)) and (turn_lat != lower_lat) and (not math.isnan(turn_lon) ) and (turn_lon != lower_lon): # Ala Vista T-bar at Kirkwood
+            folium.PolyLine([(lower_lat, lower_lon), (turn_lat, turn_lon), (upper_lat, upper_lon)],
+                        **self.the_args_dict
+                        ).add_to(self.feature_group)
+        else:
+            folium.PolyLine([(lower_lat, lower_lon), (upper_lat, upper_lon)],
+                        **self.the_args_dict
+                        ).add_to(self.feature_group)
+
+
+########################################################################################################################
+########################################################################################################################
+########################################################################################################################
+
+class SkiArea:
+    """ Data associated with a ski-resort. I.e. fixed data such as its name, perimeter, chair-lifts
+    and named runs.
+    """
+
+    ski_areas = {} # Map from ski-areas' name to a SkiArea object
+    @classmethod
+    def lookup(cls, area_name):
+        if area_name in cls.ski_areas:
+            return cls.ski_areas[area_name]
+        return None
+    @classmethod
+    def lookup_create(cls, area_name):
+        if area_name in cls.ski_areas:
+            return cls.ski_areas[area_name]
+        # Else - create it
+        return SkiArea(area_name)
+
+    def __init__(self, name, boundary=None, lifts_csv_filename=None, lifts_attrs=None, runs_csv_filename=None, runs_attrs=None):
+        self.name = name
+        self.lifts_df = pd.DataFrame()
+        self.runs_df = pd.DataFrame()
+
+        if (lifts_csv_filename is not None):
+            self.lifts_read_csv( lifts_csv_filename, lifts_attrs )
+        if (runs_csv_filename is not None):
+            self.runs_read_csv( runs_csv_filename, runs_attrs )
+
+        SkiArea.ski_areas[self.name] = self
+
+    def lifts_read_csv(self, csv_filename, attrs):
+        if os.path.isfile(csv_filename):
+            try:
+                lifts_df = pd.read_csv(csv_filename)
+                self.enhance_lifts_data( lifts_df )
+            except IOError as ee:
+                print("ERROR: error while attempting to read {}: {}".format(csv_filename, ee))
+                return None
+        else:
+            print("ERROR: File not found: {}".format(csv_filename))
+            return None
+
+        lifts = LiftHelper(self.name, attrs)
+        [   \
+            lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon) \
+            for liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon in zip(
+                self.lifts_df['Lift'],
+                self.lifts_df['EmbarkTermLat'], self.lifts_df['EmbarkTermLon'],
+                self.lifts_df['DisembarkTermLat'], self.lifts_df['DisembarkTermLon'],
+                # TODO - reconsider implementation of the following line. The TurnLat and TurnLon columns are optional
+                # in the DataFrame. So I'd like to return the value in that column if it exists, but return NaN otherwise.
+                # But I couldn't figure out how to do that. Note that nan is returned for empty cells.
+                self.lifts_df['TurnLat'] if 'TurnLat' in self.lifts_df.columns else self.lifts_df['EmbarkTermLat'],
+                self.lifts_df['TurnLon'] if 'TurnLon' in self.lifts_df.columns else self.lifts_df['EmbarkTermLon']
+                ) \
+        ]
+        return self.lifts_df
+
+    def enhance_lifts_data(self, lifts_df_as_read_from_csv):
+        return_df = lifts_df_as_read_from_csv
+        return_df.set_index("Lift", inplace=True, drop=False)
+
+        # pseudo-bearing in radians - i.e. direction of lift from lower terminal to upper
+        # Note: "pseudo" because using latitude and longitude, so not strictly cartesian (the distance a longitude degree is
+        # shorter than a latitude degree - except at equator) - but still sufficiently useful for our purposes here.
+        return_df["pBearingRadians"] = np.arctan2(
+            return_df["EmbarkTermLat"] - return_df["DisembarkTermLat"],
+            return_df["DisembarkTermLon"] - return_df["EmbarkTermLon"]
+        )
+        # Converting to degrees just for conveneince for test and debug (who can think of compass bearings in radians??)
+        # 0 <= bearing < 360 and North=0, East=90, South=180, West=270 (etc.)
+        return_df["pBearingDegrees_temp"] = return_df["pBearingRadians"] * 180 / math.pi + 90
+        return_df["pBearingDegrees"] = [value if value >= 0 else value + 360 for value in
+                                        return_df["pBearingDegrees_temp"]]
+        #print("Enhanced: {}".format(return_df))
+
+        return_df["line"] = [shapely.geometry.LineString([(llat, llon), (ulat, ulon)]) \
+                             for llat, llon, ulat, ulon in
+                             zip(return_df["EmbarkTermLat"], return_df["EmbarkTermLon"], return_df["DisembarkTermLat"],
+                                 return_df["DisembarkTermLon"]) \
+                             ]
+        #print("with Lines: {}".format(return_df))
+        self.lifts_df = pd.concat( [self.lifts_df, return_df])
+        return return_df
+
+
+
+
+    def runs_read_csv(self, csv_filename, attrs):
+        if os.path.isfile(csv_filename):
+            try:
+                runs_df = pd.read_csv(csv_filename)
+                self.enhance_runs_data( runs_df )
+            except IOError as ee:
+                print("ERROR: error while attempting to read {}: {}".format(csv_filename, ee))
+                return None
+        else:
+            print("ERROR: File not found: {}".format(csv_filename))
+            return None
+        return self.runs_df
+
+    def enhance_runs_data(self, runs_df_as_read_from_csv):
+        return_df = runs_df_as_read_from_csv
+        return_df.set_index("Run", inplace=True, drop=False)
+
+        the_points = []
+        for index, row in return_df.iterrows():
+            the_points = []
+            for zz in range(1,1000):  # I thinks this is much larger than will ever be used - but not inefficient due to break below
+                lat_col = "lat" + str(zz)
+                lon_col = "lon" + str(zz)
+                if (lat_col in return_df.columns) and (not math.isnan(return_df.loc[index, lat_col])) and (
+                        lon_col in return_df.columns) and (not math.isnan(return_df.loc[index, lon_col])):
+                    the_points.append((return_df.loc[index, lat_col], return_df.loc[index, lon_col]))
+                else:
+                    break  # End on the first empty colum (for this row)
+
+            shapely_poly = shapely.geometry.Polygon(the_points)
+            return_df.loc[index,"poly"] = shapely_poly
+
+        if False:
+            print("type(shapely_pol)y={}".format(type(shapely_poly)))
+            print("dir(shapely_poly)={}".format(dir(shapely_poly)))
+            print("shapely_poly={}".format(shapely_poly))
+
+            point_in_double_down = shapely.geometry.Point(38.92202164611146, -119.91572357139313)  # Should be inside the polygon
+            point_near_canyon = shapely.geometry.Point(38.92311355539595, -119.9165922179451)  # Should be outside the polygon
+            point_in_waterfall = shapely.geometry.Point(38.924918923297625, -119.92308095066478)
+
+
+            print("shapely_poly.intersects( point_in_double_down )={}".format(shapely_poly.intersects(point_in_double_down)))
+            print("shapely_poly.intersects( point_near_canyon )={}".format(shapely_poly.intersects(point_near_canyon)))
+            print("shapely_poly.intersects( point_in_waterfall )={}".format(shapely_poly.intersects(point_in_waterfall)))
+            print("shapely_poly.intersection( point_in_double_down )={}".format(shapely_poly.intersection(point_in_double_down)))
+            print("shapely_poly.intersection( point_near_canyon )={}".format(shapely_poly.intersection(point_near_canyon)))
+            print("shapely_poly.intersection( point_in_waterfall )={}".format(shapely_poly.intersection(point_in_waterfall)))
+
+        self.runs_df = pd.concat( [self.runs_df, return_df] )
+
+    def on_ski_lift( self, the_point, the_iterator):
+        #print("\tIn on_ski_lift( ({},{}) ): {}".format( the_point.latitude, the_point.longitude, the_point.name ) )
+        #print("\t\ttype(self.name)={}".format(type(self.name)))
+        #print("\t\tself.name={}".format(self.name))
+
+        for index, row in self.lifts_df.iterrows():
+            #print("\tindex={}, row={}".format(index, row))
+            #print("\tindex={}".format(index))
+            #if SkierVisit.near_ski_lift_lower_terminal( the_point, row ):
+            if self.near_ski_lift_lower_terminal( the_point, row ):
+                print("{} Point {} ({:.6f},{:.6f}) is near loading for {}".format( index, the_point.name, the_point.latitude, the_point.longitude, row["Lift"] ) )
+                on_lift, the_points = self.are_we_on_the_lift( the_point, the_iterator, row )
+                if on_lift:
+                    #print("Yes! We are on the lift!: index={}, the_points={}".format(index, the_points))
+                    return True, index, the_points
+        return False, None, []
+
+    @classmethod
+    def near_ski_lift_lower_terminal( self, point, the_row ):
+        distance_meters = gpxpy.geo.distance( point.latitude, point.longitude, None, the_row["EmbarkTermLat"], the_row["EmbarkTermLon"], None )
+        #print("distance={}:   ({},{}), ({},{})".format( distance_meters, point.latitude, point.longitude, the_row["EmbarkTermLat"], the_row["EmbarkTermLon"] ) )
+        return (distance_meters <= skilift_distanceA_meters)
+
+
+    def are_we_on_the_lift( self, first_point, point_it, row ):
+        # How to determine if we are on the lift?
+        #print("In are_we_on_the_lift( ({:.6f},{:.6f}), point_it, row=())".format( first_point.latitude, first_point.longitude, row) )
+
+        # Try1 - iterate thru points - measuring 3 distances
+        # A) from current location point to lower terminal
+        # B) from current location point to the lift (i.e. as a line)
+        # C) from current location point to upper terminal
+        # Step 0: anywhere - not known to be close to a lift.
+        #       Transition to step1 as soon as (A) is less than some threshold.
+        # Step 1: Near the lift, but not yet on the lift.
+        #       Transition to step1 if (B) is less than some threshold:
+        #                           AND (C) is less than then lift-length
+        #       Exit to step0 if haven't transitioned to step2 AND (A) increases to 2X threshold.
+        # Step 2: On the lift.
+        #       Transition to step3 if (A) is greater than lift-length
+        #       Exit to step0 if (B) is greater than some threshold (2X what is used in step 1?)
+        #                           OR (A) + (C) is at least 20% greater than the lift-length
+        #       Note: specifically allow the lift to stop or even roll (slightly?) backwards - i.e. so not
+        #           requiring forward progress.
+        # Step 3: Reached the far terminal. So process the lift data and transition back to step0
+        #
+        # TODO: Need to watch out for small variations in the lengths such as with if the lift stops and the GPS gets
+        # several readings with slight and small normal variations.
+        # Note - be careful with the distance measurements from two separate modules - gpxpy will correctly
+        # account for the different distances for a degree of latitude and longitude (away from the equator)
+        # and is in units of meters, while shapely will not (and is in units of degrees of
+        # latitude/longitude).
+        step = 0
+        lift_length_meters = gpxpy.geo.distance( row["EmbarkTermLat"], row["EmbarkTermLon"], None, row["DisembarkTermLat"], row["DisembarkTermLon"], None )
+        prev_distanceA_meters = gpxpy.geo.distance( first_point.latitude, first_point.longitude, None, row["EmbarkTermLat"], row["EmbarkTermLon"], None )
+        shapely_pt = shapely.geometry.Point( first_point.latitude, first_point.longitude )
+        prev_distanceB_degs = row["line"].distance( shapely_pt )
+        prev_distanceC_meters = gpxpy.geo.distance( first_point.latitude, first_point.longitude, None, row["DisembarkTermLat"], row["DisembarkTermLon"], None )
+        print("are_we_on_the_lift(): Initial distances: A={:.1f}m, B={:.6f} degrees, C={:.1f}m, LiftLength={:.1f}m,".format(prev_distanceA_meters, prev_distanceB_degs, prev_distanceC_meters, lift_length_meters))
+
+        points_on_lift = []
+        for point in point_it:
+            distanceA_meters = gpxpy.geo.distance( point.latitude, point.longitude, None, row["EmbarkTermLat"], row["EmbarkTermLon"], None )
+            shapely_pt = shapely.geometry.Point( point.latitude, point.longitude )
+            distanceB_degs = row["line"].distance( shapely_pt )
+            distanceC_meters = gpxpy.geo.distance( point.latitude, point.longitude, None, row["DisembarkTermLat"], row["DisembarkTermLon"], None )
+            cpA = SkierVisit.fp_compare(distanceA_meters, prev_distanceA_meters, 0.5 )
+            cpB = SkierVisit.fp_compare(distanceB_degs,   prev_distanceB_degs, 0.000001 )
+            cpC = SkierVisit.fp_compare(distanceC_meters, prev_distanceC_meters, 0.5 )
+            if False:
+                print("\tname={}, Step={}, Point=({:.6f},{:.6f}): distances: A={:.1f}m {}, B={:.6f} degrees {}, C={:.1f}m {}".format(point.name, step, point.latitude, point.longitude,
+                    distanceA_meters, SkierVisit.increasing_or_decreasing( cpA ),
+                    distanceB_degs,   SkierVisit.increasing_or_decreasing( cpB ),
+                    distanceC_meters, SkierVisit.increasing_or_decreasing( cpC ),
+                    ))
+            #if (step == 0):
+            #    print("ZZZ step={}, distanceA_meters={}, skilift_distanceA_meters={}, condition={}".format( step, distanceA_meters, skilift_distanceA_meters, distanceA_meters <= skilift_distanceA_meters))
+            if (step == 0) and (distanceA_meters <= skilift_distanceA_meters):
+                points_on_lift.append( point )
+                #print("\tTransitioning from step 0 to 1 at Point={}, ({:9.6f},{:9.6f}): distanceA={} <= threshold={}".format(point.name, point.latitude, point.longitude, distanceA_meters, skilift_distanceA_meters))
+                step = 1 # Note - no else for most conditions below - so potentially can also transition again
+            elif (step == 0) and (distanceA_meters > skilift_distanceA_meters):
+                return False, None
+            if (step == 1) and (distanceA_meters <= 2*skilift_distanceA_meters) and (distanceC_meters < lift_length_meters) and (distanceB_degs < skilift_distanceB_degress):
+                points_on_lift.append( point )
+                #print("\tTransitioning from step 1 to 2 at Point={}, ({:9.6f},{:9.6f}) distanceA={}, distance_B={}, distanceC={}".format( point.name, point.latitude, point.longitude, distanceA_meters, distanceB_degs, distanceC_meters))
+                step = 2 # Note there are 'else's below - so CANNOT transition to step 2 and then to 3 at the same point
+            elif (step == 1) and (distanceA_meters > 2*skilift_distanceA_meters):
+                points_on_lift.append( point )
+                #print("\tTransitioning from step 1 to 0 at Point={}, ({:9.6f},{:9.6f}): distanceA={} <= threshold={}".format(point.name, point.latitude, point.longitude, distanceA_meters, 2*skilift_distanceA_meters))
+                step = 0
+                return False, None
+            elif (step == 2) and (distanceA_meters >= lift_length_meters):
+                points_on_lift.append( point )
+                #print("\tTransitioning from step 2 to 3 Point={}, ({:9.6f},{:9.6f}): distanceA={} >= lift-length={}".format(point.name, point.latitude, point.longitude, distanceA_meters, lift_length_meters))
+                step = 3
+                #print("\tReturning True!")
+                #print("\tPoints_on_lift: {}".format(points_on_lift))
+                return True, points_on_lift
+            elif (step == 2) and ((distanceB_degs > 5*skilift_distanceB_degress) or ((distanceA_meters+distanceC_meters) > (1.25*lift_length_meters))):
+                #print("\tTransitioning from step 2 to 0 Point={}, ({:9.6f},{:9.6f})".format(point.name, point.latitude, point.longitude))
+                step = 0
+                #print("\tReturning False!")
+                return False, None
+            else: # Else - nothing to do here - skier is progressing along lift.
+                points_on_lift.append( point )
+                #print("\t\tElse - step={}".format(step))
+
+            prev_distanceA_meters = distanceA_meters
+            prev_distanceB_degs = distanceB_degs
+            prev_distanceC_meters = distanceC_meters
+        return False, None
+
+
+
+#######################################################################################################################
+#######################################################################################################################
+#######################################################################################################################
+
+class SkierVisit:
+    """ Represents data from (generally just) one skier to a particular SkiArea. Could be one or multiple days (or even
+    a season or more).
+    """
+
+    #lifts = []
+    #runs = []
+
+
+    def __init__(self, name):
+        self.lift_rides = pd.DataFrame(columns=("datetime", "name", "duration", "points")) # Accumulate the rides up the lifts here. Each row should be one ride.
+        self.timed_runs = pd.DataFrame(columns=("datetime", "name", "duration", "points"))
+        self.misc_runs  = pd.DataFrame(columns=("datetime", "name", "duration", "points"))
+        self.points_not_yet_assigned = []
+        self.ski_area_name = name
+        self.ski_area = None
+        if (self.ski_area_name is not None) and (len(self.ski_area_name) > 0):
+            self.ski_area = SkiArea.lookup(self.ski_area_name )
+        print("Creating SkierVisit object for self.ski_area name={}".format( self.ski_area.name ) )
+
+    def __del__(self):
+        print("In SkierVisit.__del__()")
+
+    def Dump(self, message=None):
+        print("VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV         SkierVisit                  VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV")
+        if message is not None:
+            print(">>>> Message: {}".format( message ) )
+        print(">>>> ski_area_name: {}".format( self.ski_area_name ) )
+        print(">>>> ski_area: {}".format( self.ski_area ) )
+        if self.ski_area is None:
+            print(">>>>\t\tSkiArea.looup({}): {}".format( self.ski_area_name, SkiArea.lookup( self.ski_area_name ) ) )
+        print(">>>> lift_rides: {}".format( len(self.lift_rides) ))
+        for index, row in self.lift_rides.iterrows():
+            #print("index={}, name={}".format(index, row["name"]))
+            #print("row={}".format(row))
+            print("\t{:>3s}: {:20s} {} duration={} #points: {} 1st/last points: {}..{} ({:9.6f},{:9.6f}), ({:9.6f},{:9.6f})".format( str(index), row["name"], row.datetime, row.duration, len(row.points), row.points[0].name, row.points[-1].name, row.points[0].latitude, row.points[0].longitude, row.points[-1].latitude, row.points[-1].longitude))
+        print(">>>> timed_runs: {}".format( len(self.timed_runs) ))
+        for index, row in self.timed_runs.iterrows():
+            if len(row.points) > 1:
+                print("\t{:20s} {} duration={} # points: {} 1st/last points: ({:9.6f},{:9.6f}), ({:9.6f},{:9.6f})".format( row["name"], row.datetime, row.duration, len(row.points), row.points[0].latitude, row.points[0].longitude, row.points[-1].latitude, row.points[-1].longitude))
+            else:
+                print("\t{:20s} {} duration={} # points: {}".format( row["name"], row.datetime, row.duration, len(row.points)))
+        print(">>>> misc_runs: {}".format( len(self.misc_runs) ))
+        for index, row in self.misc_runs.iterrows():
+            print("\t{:20s} {}  duration={} # points: {} 1st/last points: ({:9.6f},{:9.6f}), ({:9.6f},{:9.6f})".format( row["name"], row.datetime, row.duration, len(row.points), row.points[0].latitude, row.points[0].longitude, row.points[-1].latitude, row.points[-1].longitude))
+        print(">>>> len(points_not_yet_assigned): {}".format( len(self.points_not_yet_assigned) ) )
+        print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+
+    def AddPoint(self, the_point):
+        self.points_not_yet_assigned.append( the_point )
+    def BreakRun(self):
+        if len(self.points_not_yet_assigned) > 0:
+            self.CheckForTimedRuns(self.points_not_yet_assigned, self.ski_area)
+            self.points_not_yet_assigned = []
+    def AddLiftRide(self, the_points, liftname):
+        self.lift_rides = pd.concat( [self.lift_rides, pd.Series({"datetime" : the_points[0].time, "name" : liftname, "duration": the_points[-1].time_difference( the_points[0] ), "points": the_points}).to_frame().T], ignore_index=True )
+
+    def ShapelyLineStringGenerator(the_shapely_thing):
+        if isinstance( the_shapely_thing, shapely.geometry.linestring.LineString):
+            yield the_shapely_thing
+        elif isinstance( the_shapely_thing, shapely.geometry.multilinestring.MultiLineString):
+            #for the_thing in the_shapely_thing: # Results in ShapelyDeprecationWarning: Iteration over multi-part geometries is deprecated and will be removed in Shapely 2.0. Use the `geoms` property...
+            for the_thing in the_shapely_thing.geoms:
+                yield the_thing
+        else:
+            print("Unexpected type in ShapelyLinStringGenerator: {}".format( type( the_shapely_thing)))
+            exit(-1)
+
+
+    def CheckForTimedRuns(self, track_points, skiarea):
+        # Track points represents a path of one skier - generally from getting off one lift until getting on the next lift.
+        # We may split this into multiple smaller runs (each a timed_run)- based on the named runs (each a polygon)
+        # Dealing with different types of "points" here. We need shapely points to find the intersections (where a track
+        # crosses into a ski-run), but the shapely point doesn't support all the information we want (such as time and
+        # name). Therefore, creating points_map to take the shapely point and map back to the original point with the
+        # necessary information.
+        print("SkierVisit.CheckForTimedRuns(): len(track_points)={}, skiarea={}".format( len(track_points), skiarea.name ) )
+
+        points_map = {(point.latitude,point.longitude,point.elevation):index for index,point in enumerate(track_points)}
+        #print("track_points: {}..{}".format( track_points[0].name, track_points[-1].name ))
+        #print("track_points={}".format(track_points))
+        #print("track_points[0]={}".format(track_points[0]))
+        #print("type(track_points[0])={}".format(type(track_points[0])))
+        #print("track_points[0].latitude={}".format(track_points[0].latitude))
+        #print("track_points[0].longitude={}".format(track_points[0].longitude))
+        #print("track_points[0].elevation={}".format(track_points[0].elevation))
+        #print("track_points[0].time={}".format(track_points[0].time))
+        if (track_points[0].elevation is None) or (track_points[0].time is None):
+            print("CheckForTimedRuns(): !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  track_points[0].elevation={}, time={}".format(track_points[0].elevation, track_points[0].time))
+            for zz in track_points:
+                if zz.latitude is None: print("\tlatitude is None")
+                if zz.longitude is None: print("\tlatitude is None")
+        #print("point.latitude={}".format(track_points[0].latitude))
+        #print("getattr(point,latitude)={}".format( getattr( track_points[0], "latitude")))
+        #print("getattr(point,latitude)={}".format( getattr( track_points[0], "latitude", 0)))
+        #print("getattr(point,elevation)={}".format( getattr( track_points[0], "elevation")))
+        #print("getattr(point,elevation)={}".format( getattr( track_points[0], "elevation", 0)))
+        #track_shapely = shapely.geometry.LineString( [(point.latitude,point.longitude,point.elevation) for point in track_points])
+        points_list =[(point.latitude,point.longitude,getattr(point, "elevation", 0) if getattr(point,"elevation",0) is not None else 0) for point in track_points]
+        #print("CheckForTimedRuns(): points_list={}".format(points_list))
+        if len(points_list) > 1:
+            track_shapely = shapely.geometry.LineString( points_list )
+            if False:
+                print("CheckForTimedRuns(): SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSsss")
+                print("CheckForTimedRuns(): track_points: {}..{}".format( track_points[0].name, track_points[-1].name ))
+                print("CheckForTimedRuns(): track_points={}".format(track_points))
+                print("CheckForTimedRuns(): type(track_shapely)={}".format( type(track_shapely)))
+                print("CheckForTimedRuns(): track_shapely={}".format( track_shapely))
+                for the_key in points_map.keys():
+                    print("CheckForTimedRuns(): points_map.keys(): ({},{},{}), index={}, name={}, time={}".format(the_key[0], the_key[1], the_key[2], points_map[the_key], track_points[points_map[the_key]].name,track_points[points_map[the_key]].time))
+
+            regions = [] # list of (first_index, last_index, linestring, name)
+            for named_run, row in skiarea.runs_df.iterrows():
+                print("CheckForTimedRuns():\tnamed_run={}".format(named_run))
+                if False:
+                    print("CheckForTimedRuns(): type(row[poly])={}".format( type(row["poly"]) ))
+                    print("CheckForTimedRuns(): row[poly]={}".format( row["poly"] ))
+                    print("CheckForTimedRuns(): AB Intersects {}: {}".format( named_run, track_shapely.intersects( row["poly"] )))
+                    print("CheckForTimedRuns(): BA Intersects {}: {}".format( named_run, row["poly"].intersects( track_shapely )))
+                    print("CheckForTimedRuns(): AB Intersection {}: {}".format( named_run, track_shapely.intersection( row["poly"] )))
+                    print("CheckForTimedRuns(): BA Intersection {}: {}".format( named_run, row["poly"].intersection( track_shapely )))
+                    print("CheckForTimedRuns(): AB Intersection.is_empty {}: {}".format( named_run, track_shapely.intersection( row["poly"] ).is_empty))
+                    print("CheckForTimedRuns(): BA Intersection.is_empty {}: {}".format( named_run, row["poly"].intersection( track_shapely ).is_empty))
+                    print("CheckForTimedRuns(): AB Crosses {}: {}".format( named_run, track_shapely.crosses( row["poly"] )))
+                    print("CheckForTimedRuns(): BA Crosses {}: {}".format( named_run, row["poly"].crosses( track_shapely )))
+                    print("CheckForTimedRuns(): AB Overlaps {}: {}".format( named_run, track_shapely.overlaps( row["poly"] )))
+                    print("CheckForTimedRuns(): BA Overlaps {}: {}".format( named_run, row["poly"].overlaps( track_shapely )))
+                    print("CheckForTimedRuns(): AB Relate {}: {}".format( named_run, track_shapely.relate( row["poly"] )))
+                    print("CheckForTimedRuns(): BA Relate {}: {}".format( named_run, row["poly"].relate( track_shapely )))
+                if track_shapely.intersects( row["poly"] ):
+                    the_intersection = track_shapely.intersection( row["poly"])
+                    if False:
+                        print("CheckForTimedRuns(): type(the_intersection)={}".format( type(the_intersection) ))
+                        print("CheckForTimedRuns(): dir(the_intersection)={}".format( dir(the_intersection) ))
+                    if not the_intersection.is_empty:
+                        my_gen = SkierVisit.ShapelyLineStringGenerator(the_intersection)
+                        for track_shapely in my_gen:
+                            if False:
+                                print("type(track_shapely)={}".format(type(track_shapely)))
+                                print("dir(track_shapely)={}".format(dir(track_shapely)))
+                                print("track_shapely={}".format(track_shapely))
+                            # Normally I see that the first and last points are not exactly in the original track_points.
+                            # Rather, they are interpolated between two points in the original track_points (i.e. where
+                            # the track_points crosses into the polygon.
+                            the_run = [(point[0],point[1],point[2]) for point in track_shapely.coords] # Converting from shapely points to what is used to key points_map
+                            print("the_run has {} points: {}".format( len(the_run), the_run))
+                            if False:
+                                print("First_point: ({},{},{})".format(the_run[0][0], the_run[0][1], the_run[0][2]))
+                                print("Second_point: ({},{},{})".format(the_run[1][0], the_run[1][1], the_run[1][2]))
+                                print("Last_point: ({},{},{})".format(the_run[-1][0], the_run[-1][1], the_run[-1][2]))
+                                print("NextToLast_point: ({},{},{})".format(the_run[-2][0], the_run[-2][1], the_run[-2][2]))
+                            first_index = points_map.get( (the_run[0][0], the_run[0][1], the_run[0][2] ) )
+                            if first_index is None:
+                                first_index = points_map.get( (the_run[1][0], the_run[1][1], the_run[1][2] ) )
+                                print("Trying again: first_index={}".format(first_index))
+                            last_index = points_map.get( (the_run[-1][0], the_run[-1][1], the_run[-1][2] ) )
+                            if last_index is None:
+                                last_index = points_map.get( (the_run[-2][0], the_run[-2][1], the_run[-2][2] ) )
+                            print("first_index={}, last_index={}".format(first_index, last_index))
+                            if (first_index is not None) and (last_index is not None):
+                                print("The run - from points {} .. {}  ({} .. {})".format( first_index, last_index, track_points[first_index].name, track_points[last_index].name))
+                                regions.append( (first_index, last_index, the_run, named_run))
+                            else:
+                                print("Skipping short run with {} points: {}".format( len(the_run), the_run))
+
+
+            #print("len(regions)={}".format( len(regions) ) )
+            if len(regions) == 0:
+                regions = [(0,-1,track_points,"unnamed run")]
+            regions.sort()
+            #print("After sort regions={}".format( regions) )
+            next_point_index = 0
+            last_point_index = len(track_points)-1
+            for tuple in regions:
+                region_pt_1st = tuple[0]
+                region_pt_last = tuple[1]
+                the_run = tuple[2]
+                the_name = tuple[3]
+                duration = track_points[region_pt_1st-1].time - track_points[next_point_index].time if (track_points[region_pt_1st-1].time is not None) and (track_points[next_point_index].time is not None) else 0
+                if (next_point_index < region_pt_1st): # Implied region before? (i.e. from original track_points)
+                    the_series_before = pd.Series({
+                        "datetime": track_points[next_point_index],
+                        "name": "unnamed run1",
+                        "duration": duration,
+                        "points": track_points[next_point_index:region_pt_1st-1]
+                    })
+                    self.misc_runs = pd.concat( [self.misc_runs, the_series_before.to_frame().T])
+                print("CheckForTimedRuns() times: {}, {}".format( track_points[region_pt_last].time, track_points[region_pt_1st].time ) )
+                duration = track_points[region_pt_last].time - track_points[region_pt_1st].time if (track_points[region_pt_last].time is not None) and (track_points[region_pt_1st].time is not None) else 0
+                the_series = pd.Series({
+                    "datetime": track_points[region_pt_1st],
+                    "name": the_name,
+                    "duration": duration,
+                    "points": track_points[region_pt_1st:region_pt_last] # TODO - add the interpolated points (see above)
+                })
+                self.timed_runs = pd.concat([self.timed_runs, the_series.to_frame().T])
+                next_point_index = region_pt_last+1
+
+            # Any remaining implied region after the last region?
+            if next_point_index < last_point_index:
+                duration = track_points[last_point_index].time - track_points[next_point_index].time if (track_points[last_point_index].time is not None) and (track_points[next_point_index].time is not None) else 0
+                the_series_after = pd.Series({
+                    "datetime": track_points[next_point_index],
+                    "name": "unnamed run2",
+                    "duration": duration,
+                    "points": track_points[next_point_index:last_point_index]
+                })
+                self.misc_runs = pd.concat([self.misc_runs, the_series_after.to_frame().T])
+
+
+    @classmethod
+    def fp_compare( cls, value1, value2, threshold): # returns +1 if value1>value2, -1 if value1<value2, 0 if equal - or almost equal (with +/- threshold)
+        diff = abs( value1 - value2)
+        if (diff < threshold):
+            return 0
+        if (value1 > value2):
+            return 1
+        return -1
+
+    @classmethod
+    def increasing_or_decreasing( cls, fp_compare ):
+        if (fp_compare == 0):
+            return "nearly equal"
+        elif (fp_compare > 0):
+            return "increasing"
+        else:
+            return "decreasing"
+
+
+    def processSkiTracks( self, list_of_tracks, the_tuple ):
+        print("In processSkiTracks():   ------------------------------------------------------------------------------ ")
+        self.Dump()
+        the_iterator = GPS_point_iterator( list_of_tracks )
+        for the_point in the_iterator:
+            #print("The point: {}  ({},{})".format( the_point.name, the_point.latitude, the_point.longitude ) )
+            on_lift, lift_name, the_points = self.ski_area.on_ski_lift( the_point, the_iterator )
+            if on_lift:
+                #print("\tThe point: {}  ({},{}): on_ski_lift() returned True!    lift_name={}     # points={}               =======================".format( the_point.name, the_point.latitude, the_point.longitude, lift_name, len(the_points) ))
+                self.AddLiftRide(the_points, lift_name)
+                self.BreakRun()
+            else:
+                #print("\tThe point: {}  ({},{}): on_ski_lift() returned False! # points={}".format( the_point.name, the_point.latitude, the_point.longitude, len(the_points) ))
+                self.AddPoint( the_point )
+
+    def DrawOnMap(self, formatted_timestamp):
+        print("==================================================== DrawOnMap()     +++++++++++++++++++++++++++++++++")
+
+        for df, feature_name, the_args_dict in zip( [self.lift_rides, self.timed_runs, self.misc_runs],
+                                                    ["lift_rides", "timed_runs", "misc_runs"],
+                                                    [{"color": "pink", "weight": 2, "opacity": 0.8},
+                                                     {"color": "teal", "weight": 2, "opacity": 0.8},
+                                                     {"color": "orange", "weight": 2, "opacity": 0.8 } ]  ):
+            #print("QQQQQ feature_name={}".format(feature_name))
+            if df is not None:
+                tracking_group = folium.FeatureGroup(feature_name, control=True, show=True)
+                tracking_group.add_to(folium_map)
+                name = ""
+                for index, row in df.iterrows():
+                    if len(row["points"]) > 0:
+                        end_to_end_length = row["points"][0].distance_2d( row["points"][-1] )
+                        name = row["name"]
+                        if name == "":
+                            name = feature_name
+                        polyline = folium.PolyLine([(point.latitude,point.longitude) for point in row.points],
+                                       **the_args_dict,
+                                       dash_array="class_" + formatted_timestamp,
+                                       tooltip=name,
+                                       popup=create_track_popup2(row["points"], feature_name, name, formatted_timestamp)
+                                       )
+                        polyline.add_to(tracking_group)
+                        OverallBBoxCheck( row["points"][0].latitude, row["points"][0].longitude)
+                        OverallBBoxCheck( row["points"][-1].latitude, row["points"][-1].longitude)
+
+    def CreateCsvFiles(self, base_path):
+        if not self.lift_rides.empty:
+            self.lift_rides.to_csv(base_path + "_lift_rides.csv")
+        if not self.timed_runs.empty:
+            self.lift_rides.to_csv(base_path + "_timed_runs.csv")
+        if not self.misc_runs.empty:
+            self.lift_rides.to_csv(base_path + "_misc_runs.csv")
+
+
+def correct_GPS_track_points( track_points ):
+    """ Some processing requires certain named fields in each tuple in the list track_points, this
+    routine is intended to take the list and add any required but missing fields.
+    """
+    print("ZZZZ type(track_points)={}".format(type(track_points)))
+    print("ZZZZ type(track_points[0])={}".format(type(track_points[0])))
+    print("ZZZZ track_points[0]={}".format(track_points[0]))
+    print("ZZZZ track_points[0].latitude={}".format(track_points[0].latitude))
+    print("ZZZZ track_points[0].longitude={}".format(track_points[0].longitude))
+    print("ZZZZ track_points[0].elevation={}".format(track_points[0].elevation))
+    for index, tuple in enumerate( track_points ):
+        if track_points[index].elevation is None:
+            track_points[index].elevation = 0
+        if track_points[index].time is None:
+            track_points[index].time = 0
+    return track_points
+
+class GPS_point_iterator:
+                # See also https://codereview.stackexchange.com/questions/178797/generator-iterator-with-push-back-function
+    def __init__(self,list_of_track): # List of points could/should be gpxpy.gpx.GPXTrackSegment:
+        self.list_of_tracks=list_of_tracks
+        self.pushed_back = []
+        self.the_gen = GPS_point_iterator.the_generator(self.list_of_tracks)
+    def __iter__(self):
+        return self
+
+    def the_generator(list_of_tracks):
+        for the_tuple in list_of_tracks:
+            for the_point in the_tuple[2].points:
+                #print("the_generator: yield: {}".format( the_point ))
+                yield the_point
+
+    def __next__(self):
+        if self.pushed_back:
+            #print("__next__() self.pushed_back: {}".format( type(self.pushed_back) ) )
+            #print("__next__(): list: {}".format( self.pushed_back ) )
+            return self.pushed_back.pop(0)
+        try:
+            the_next = next( self.the_gen )
+            #print("__next__(): the_next={}".format( the_next ) )
+            return the_next
+        except StopIteration:
+            raise
+    def next(self):
+        return self.__next__()
+    def PushBack( self, pb_list ):
+        print("PushBack() before: self.pushed_back: {}, pb_list: {}".format( type(self.pushed_back), type(pb_list) ) )
+        self.pushed_back.extend( pb_list )
+        print("PushBack() after: self.pushed_back: {}".format( type(self.pushed_back) ) )
+
+def zzz1(list_of_tracks):
+    # Assume list_of_tracks as returned from read_gpx_file()
+    print("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ     zzz1()    ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ")
+    for track_tuple in list_of_tracks:
+        print("track_tuple")
+        print("\ttype(track_tuple)={}".format( type(track_tuple) ))
+        print("\ttype(track_tuple[0])={}".format( type(track_tuple[0]) ))
+        print("\ttrack_tuple[0]={}".format( type(track_tuple[0]) ))
+        print("\ttype(track_tuple[1])={}".format( type(track_tuple[1]) ))
+        print("\tlen(track_tuple[1])={}".format( len(track_tuple[1]) ))
+        #print("\ttrack_tuple[1]={}".format( track_tuple[1]))
+        for point in track_tuple[1]:
+            print("\t\tpoint={}".format(point))
+        if len(track_tuple) >= 2:
+            print("\ttype(track_tuple[2])={}".format( type(track_tuple[2]) ))
+            print("\ttrack_tuple[2]={}".format( track_tuple[2] ))
+            print("\ttype(track_tuple[2].points)={}".format( type(track_tuple[2].points) ))
+            print("\tlen(track_tuple[2].points)={}".format( len(track_tuple[2].points) ))
+            #print("\ttrack_tuple[2].points={}".format( track_tuple[2].points ))
+            print("\tdir(track_tuple[2].points)={}".format( dir(track_tuple[2].points) ))
+            for point in track_tuple[2].points:
+                print("\t\tpoint: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+    print("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+
+def zzz2(gpx):
+    # Assume type(gpx): <class 'gpxpy.gpx.GPX'>
+    print("========================    Begin zzz2()    ===============================")
+    print("type(gpx): {}".format(type(gpx)))
+    print("gpx: {}".format(gpx))
+    print("")
+    print("type(gpx.tracks): {}".format(type(gpx.tracks)))
+    print("len(gpx.tracks): {}".format(len(gpx.tracks)))
+    print("gpx.tracks: {}".format(gpx.tracks))
+    print("")
+    print("type(gpx.tracks[0]): {}".format(type(gpx.tracks[0])))
+    print("gpx.tracks[0]: {}".format(gpx.tracks[0]))
+    print("")
+    print("type(gpx.tracks[0].name): {}".format(type(gpx.tracks[0].name)))
+    print("gpx.tracks[0].name: {}".format(gpx.tracks[0].name))
+    print("")
+    print("type(gpx.tracks[0].segments): {}".format(type(gpx.tracks[0].segments)))
+    print("len(gpx.tracks[0].segments): {}".format(len(gpx.tracks[0].segments)))
+    print("gpx.tracks[0].segments: {}".format(gpx.tracks[0].segments))
+    print("")
+    print("type(gpx.tracks[0].segments[0]): {}".format(type(gpx.tracks[0].segments[0])))
+    print("gpx.tracks[0].segments[0]: {}".format(gpx.tracks[0].segments[0]))
+    print("")
+    print("type(gpx.tracks[0].segments[0].points): {}".format(type(gpx.tracks[0].segments[0].points)))
+    print("len(gpx.tracks[0].segments[0].points): {}".format(len(gpx.tracks[0].segments[0].points)))
+    #print("gpx.tracks[0].segments[0].points: {}".format(gpx.tracks[0].segments[0].points))
+    print("")
+    print("type(gpx.tracks[0].segments[0].points[0]): {}".format(type(gpx.tracks[0].segments[0].points[0])))
+    print("dir(gpx.tracks[0].segments[0].points[0]): {}".format(dir(gpx.tracks[0].segments[0].points[0])))
+    print("gpx.tracks[0].segments[0].points[0]: {}".format(gpx.tracks[0].segments[0].points[0]))
+    print("")
+    print("gpx.tracks[0].segments[0].points[0].name: {}".format(gpx.tracks[0].segments[0].points[0].name))
+    print("gpx.tracks[0].segments[0].points[0].latitude: {}".format(gpx.tracks[0].segments[0].points[0].latitude))
+    print("gpx.tracks[0].segments[0].points[0].longitude: {}".format(gpx.tracks[0].segments[0].points[0].longitude))
+    print("gpx.tracks[0].segments[0].points[0].elevation: {}".format(gpx.tracks[0].segments[0].points[0].elevation))
+    print("gpx.tracks[0].segments[0].points[0].time: {}".format(gpx.tracks[0].segments[0].points[0].time))
+    print("")
+    if False:
+        for att in dir(gpx.tracks[0].segments[0].points[0]):
+            print("\tatt={}, value={}".format( att, getattr( gpx.tracks[0].segments[0].points[0], att) ) )
+    print("========================    End of zzz2()    ===============================")
+
+def zzz3( list_of_tracks ):
+    the_iterator = GPS_point_iterator( list_of_tracks )
+    print("the_iterator={}".format(the_iterator))
+    print("type(the_iterator)={}".format(type(the_iterator)))
+    if False:
+        for point in the_iterator:
+            print("zzz3b: point: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+    else:
+        point = the_iterator.next()
+        point1 = point
+        print("zzz3: 1 point: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+        point = the_iterator.next()
+        point2 = point
+        print("zzz3: 2 point: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+        point = the_iterator.next()
+        print("zzz3: 3 point: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+        the_iterator.PushBack( [point1, point2, point] )
+        point = the_iterator.next()
+        print("zzz3: 1 again point: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+        point = the_iterator.next()
+        print("zzz3: 2 again point: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+        point = the_iterator.next()
+        print("zzz3: 3 again point: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+        point = the_iterator.next()
+        print("zzz3: 4 point: name={}, latitude={}, longitude={}, elevation={}, time={}".format(point.name, point.latitude, point.longitude, point.elevation, point.time))
+
 
 
 ########################################################################################################################
@@ -1010,15 +1766,21 @@ if __name__ == "__main__":
                                 correction). Tracks are checked against
                                 -include and -exclude regions. Typically loaded
                                 from a GPX file.
+                                (-skitracks is a variation that adds some
+                                additional features specific to skiing - this
+                                is work-in-progress).
                             -polygon is somewhat similar to -fixed but intended
                                 to show enclosed areas - and so is created as a
                                 polygon rather than a polyline. This means the
                                 -polygon has an interior - and additional
                                 attributes (such as fill_color) may be applied.
                                 Typically loaded from a GPX file.
-                            -lifts are little more than lines - identified by
+                            -skilifts are little more than lines - identified by
                                 the two latitude,longitude of each of the two
                                 end-points. These are loaded from a CSV file.
+                                Note: there is a supported special case where
+                                there is a turn in the lift (see Vista T-Bar
+                                at Kirkwood for an example).
                         -include and -exclude help to filter the input data,
                             both for efficiency and for privacy. Anvimage-
                             marker or a point in a -tracks will NOT be
@@ -1061,7 +1823,12 @@ if __name__ == "__main__":
                             help="Name of file to be created with the generated HTML.")
 
     arg_parser.add_argument("-tracks", "--tracks",
-                            help="location of the GPX file(s) identify hiking tracks (path hiked):"
+                            help="location of the GPX file(s) identify tracks (such as path hiked):"
+                                 " <file-or-directory> [<name> [<args-see-descr>]]",
+                            nargs="+", action="append", type=str)
+
+    arg_parser.add_argument("-skitracks", "--skitracks",
+                            help="location of the GPX file(s) identify skiiing tracks:"
                                  " <file-or-directory> [<href-such-as-url> [<args-see-descr>]]",
                             nargs="+", action="append", type=str)
 
@@ -1085,10 +1852,16 @@ if __name__ == "__main__":
                                  " <gpx-filename> [<label> [<args-see-descr> [<popup-text>]]]]",
                             nargs="+", action='append')
 
-    arg_parser.add_argument("-lifts", "--lifts", type=str,
+    arg_parser.add_argument("-skilifts", "--skilifts", type=str,
                             help="CSV file identifying GPS coordinates of lower and upper terminals of ski-lifts. CSV"
-                                " headers should be: Lift,LowerTermLat,LowerTermLon,UpperTermLat,UpperTermLon."
-                                " Positional command-line arguments are <csv-filename> [args-see-descr>]",
+                                " headers should be: Lift,EmbarkTermLat,EmbarkTermLon,DisembarkTermLat,DisembarkTermLon."
+                                " Positional command-line arguments are <csv-filename> [<args-see-descr>]"
+                                " Note, rarely used, but TurnLat and TurnLon are optional column headers.",
+                            nargs="+", action='append')
+    arg_parser.add_argument("-skiruns", "--skiruns", type=str,
+                            help="CSV file identifying GPS coordinates polygons containing ski-runs. CSV"
+                                " headers should be: Run,Rating,lat1,lon1,lat2,lon2,lat3,lon3, etc"
+                                " Positional command-line arguments are <csv-filename>",
                             nargs="+", action='append')
 
     arg_parser.add_argument("-include", "--include", type=float,
@@ -1113,7 +1886,7 @@ if __name__ == "__main__":
                                 " on layers menu",
                             default=0)
     arg_parser.add_argument("-showrejections", "--showrejections", type=int, action="store", nargs='?', const=1,
-                            help="Show the points rejected due to bounding-boxes.", default=0)
+                            help="List the points rejected due to bounding-boxes.", default=0)
     arg_parser.add_argument("-correctgps", "--correctgps", type=int, action="store", nargs='?', const=1,
                             help="Attempt to correct 'bad' GPS coordinates in JPEG files using date/time of tracking"
                                 " (GPX) files. 0=disable, 1=enable, 2=show changes",
@@ -1126,14 +1899,23 @@ if __name__ == "__main__":
     arg_parser.add_argument("-css_url", "--css_url", type=str, action="append", nargs=2,
                             help="A pair of strings - to identify a <css-name> <url> such that the URL identifies a CSS file.")
 
+    arg_parser.add_argument("-slideshow", "--slideshow", type=str, action="store", nargs='?', default="https://kokanee.mynetgear.com/dvo/slideshow.html",
+                            help="URL for slideshow (files passed via GET arguments")
+    arg_parser.add_argument("-ss_url_prefix", "--ss_url_prefix", type=str, action="store",
+                            help="Argument passed to the slideshow to send to the image-server via GET arguments")
+    arg_parser.add_argument("-ss_pace", "--ss_pace", type=int, action="store", default=6000,
+                            help="Slide-show auto-advance rate - in milliseconds (1000=1 second)")
+
     args = arg_parser.parse_args()
     if args.debug >= 1:
         print("folium version={}".format(folium.__version__))
         print("pandas version={}".format(pd.__version__))
+        print("shapely version={}".format(shapely.__version__))
         print("---------------------")
         print("debug({}): {}".format(type(args.debug), args.debug))
         print("profile({}): {}".format(type(args.profile), args.profile))
         print("tracks({}): {}".format(type(args.tracks), args.tracks))
+
         print("outfile({}): {}".format(type(args.outfile), args.outfile))
         print("photos({}): {}".format(type(args.photos), args.photos))
         print("pm_group({}): {}".format(type(args.pm_group), args.pm_group))
@@ -1145,9 +1927,14 @@ if __name__ == "__main__":
         print("showrejections({}): {}".format(type(args.showrejections), args.showrejections))
         print("correctgps({}): {}".format(type(args.correctgps), args.correctgps))
         print("cachecorrections({}): {}".format(type(args.cachecorrections), args.cachecorrections))
-        print("lifts({}): {}".format(type(args.lifts), args.lifts))
+        print("skilifts({}): {}".format(type(args.skilifts), args.skilifts))
+        print("skiruns({}): {}".format(type(args.skiruns), args.skiruns))
+        print("skitracks({}): {}".format(type(args.skitracks), args.skitracks))
         print("checkbox_how({}): {}".format(type(args.checkbox_how), args.checkbox_how))
         print("css_url({}): {}".format(type(args.css_url), args.css_url))
+        print("slideshow({}): {}".format(type(args.slideshow), args.slideshow))
+        print("ss_url_prefix({}): {}".format(type(args.ss_url_prefix), args.ss_url_prefix))
+        print("ss_pace({}): {}".format(type(args.ss_pace), args.ss_pace))
         print("---------------------")
 
     DateTimeCheckboxMgr.set_how(args.checkbox_how)
@@ -1179,47 +1966,17 @@ if __name__ == "__main__":
             exclude_boxes.append( CreateBBox(exclude_info) )
     the_profiler.profile("Decode the include/exclude boxes")
 
-    args_to_poly(args.polygon, folium.Polygon)
-    the_profiler.profile("Polygons")
-
-
-    if args.lifts is not None:
-        for the_tuple in args.lifts:
-            filename = the_tuple[0]
-            the_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else "lifts"
-            the_args = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
-            if os.path.isfile(filename):
-                try:
-                    lifts_df = pd.read_csv(filename)
-                except IOError as ee:
-                    print("ERROR: error while attempting to read {}: {}".format(filename, ee))
-                    exit(1)
-            else:
-                print("ERROR: File not found: {}".format(filename))
-                exit(1)
-            lifts = LiftHelper(the_name, the_args)
-            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon) \
-             for liftname, lower_lat, lower_lon, upper_lat, upper_lon in zip(
-                lifts_df['Lift'], lifts_df['LowerTermLat'], lifts_df['LowerTermLon'], lifts_df['UpperTermLat'],
-                lifts_df['UpperTermLon'])
-             ]
-    the_profiler.profile("Lifts")
-
-
-    args_to_poly(args.fixed, folium.PolyLine)
-    the_profiler.profile("Fixed Routes")
-
     photo_group = folium.FeatureGroup("Photographs", control=True, show=True)
     folium_map.add_child(photo_group)
 
 
+    jpeg_df = pd.DataFrame()
     if (args.photos is not None) and (len(args.photos) >= 1):
         nested_profiler = SimpleHierProfiler("Scanning EXIF data from photos")
-        jpeg_df = pd.DataFrame()
         for the_tuple in args.photos:
             directory_name = the_tuple[0]
             the_photos_href = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else ""
-            the_photos_args_string = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[1] is not None) else ""
+            the_photos_args_string = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
             the_photos_args_dict = string_to_dict(the_photos_args_string)
 
             exif_df = get_EXIF_from_directory(directory_name, the_photos_href, args_dict=the_photos_args_dict)
@@ -1229,7 +1986,7 @@ if __name__ == "__main__":
         jpeg_df.set_index('filename', inplace=True, drop=False)
         nested_profiler.end()
 
-    the_profiler.profile("Read EXIF data and created DataFrame")
+        the_profiler.profile("Read EXIF data and created DataFrame")
 
     if (args.correctgps >= 1) or (args.cachecorrections is not None):
         jpeg_df, corrected_count = correct_EXIF_GPS_coordinates(jpeg_df, args.correctgps >= 1, args.cachecorrections)
@@ -1256,18 +2013,60 @@ if __name__ == "__main__":
 
     the_profiler.profile("Sorted by latitude and longitude")
 
-    dbl_filtered_df = jpeg_df.groupby(["lat_round", "lon_round"])
-    for lon_round, thing2 in dbl_filtered_df:
+    if ("latitude" in jpeg_df) and ("longitude" in jpeg_df):
+        jpeg_df = jpeg_df.groupby(["lat_round", "lon_round"])
+    for lon_round, thing2 in jpeg_df:
         thing3 = thing2.copy()  # This "fixes" the SettingWithCopyWarning mentioned elsewhere in this file.
         create_photo_marker(thing3, include_boxes, exclude_boxes, args.showrejections, args.checkbox_how)
 
     the_profiler.profile("Grouped by latitude and longitude")
 
-    for the_tuple in args.tracks:
+
+    lifts_df = pd.DataFrame()
+    if args.skilifts is not None:
+        for the_tuple in args.skilifts:
+            filename = the_tuple[0]
+            feature_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else "lifts"
+            the_args = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
+            the_ski_area_name = the_tuple[3] if (len(the_tuple) >= 4) and (the_tuple[3] is not None) else ""
+            ski_area = SkiArea.lookup_create(the_ski_area_name)
+            if os.path.isfile(filename):
+                try:
+                    lifts_df = ski_area.lifts_read_csv(filename, the_args)
+                except IOError as ee:
+                    print("ERROR: error while attempting to read {}: {}".format(filename, ee))
+                    exit(1)
+            else:
+                print("ERROR: File not found: {}".format(filename))
+                exit(1)
+            lifts = LiftHelper(feature_name, the_args)
+            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon) \
+             for liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon in zip(
+                lifts_df['Lift'],
+                lifts_df['EmbarkTermLat'], lifts_df['EmbarkTermLon'],
+                lifts_df['DisembarkTermLat'], lifts_df['DisembarkTermLon'],
+                # TODO - reconsider implementation of the following line. The TurnLat and TurnLon columns are optional
+                # in the DataFrame. So I'd like to return the value in that column if it exists, but return NaN otherwise.
+                # But I couldn't figure out how to do that. Note that nan is returned for empty cells.
+                lifts_df['TurnLat'] if 'TurnLat' in lifts_df.columns else lifts_df['EmbarkTermLat'], lifts_df['TurnLon'] if 'TurnLon' in lifts_df.columns else lifts_df['EmbarkTermLon']
+                )
+             ]
+    the_profiler.profile("Lifts")
+
+    if args.skiruns is not None:
+        for the_tuple in args.skiruns:
+            filename = the_tuple[0]
+            feature_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else "runs"
+            the_args = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
+            ski_area = SkiArea.lookup_create(feature_name)
+            ski_area.runs_read_csv(filename,the_args)
+
+    all_tracks = args.tracks if (args.tracks is not None) else [] + args.skitracks if (args.skitracks is not None) else []
+    for the_tuple in all_tracks:
         pathname = the_tuple[0] if (len(the_tuple) >= 1) and (the_tuple[0] is not None) else ""
-        the_tracks_href = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else ""
-        feature_name = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
-        the_args_string = the_tuple[3] if (len(the_tuple) >= 4) and (the_tuple[3] is not None) else ""
+        feature_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else ""
+        the_args_string = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
+        refering_to = the_tuple[3] if (len(the_tuple) >= 4) and (the_tuple[3] is not None) else ""
         profiler = SimpleHierProfiler("Loop to read/process GPX for {}".format(pathname))
         the_args_dict = string_to_dict(the_args_string)
         file_list = [os.path.join(pathname, f) for f in sorted(os.listdir(pathname), reverse=True)] if os.path.isdir(
@@ -1288,25 +2087,42 @@ if __name__ == "__main__":
 
                 formatted_timestamp = DateTimeCheckboxMgr.submit_checkbox_datetime(first_time)
 
-                for track_tuple in list_of_tracks:
-                    end_to_end_length = distance_start_and_end(track_tuple[1])
-                    adjusted_list_of_points = remove_excluded_points(track_tuple[1], exclude_boxes, args.showrejections >= 1)
-                    polyline = folium.PolyLine(adjusted_list_of_points,
-                                               **the_args_dict,
-                                               tooltip=the_label,
-                                               # Tried lots of variations - but couldn't get the className stuff to pass information into the generated .html file
-                                               dash_array="class_" + formatted_timestamp,
-                                               # This is a kluge - apparently folium doesn't support class_name="..." (documentation
-                                               # implies it should), so I'm picking a little-used attribute (dashArray) that is supported and hijacking it.
-                                               # Relying on a post-processing step in the generated .html file to change the generated "dashArray" to the desired "className"
-                                               # There's another near-identical kluge elsewhere in this file.
-                                               popup=create_track_popup(track_tuple[2], end_to_end_length, the_label,file_part, the_tracks_href, formatted_timestamp)
-                                               )
-                    OverallBBoxCheck_GPX( track_tuple[2].get_bounds() )
-                    polyline.add_to(tracking_group)
+                if (args.skitracks is not None) and (the_tuple in args.skitracks):
+                    skier_visit = SkierVisit(refering_to)
+                    list_of_tracks = skier_visit.processSkiTracks( list_of_tracks, the_tuple )
+                    skier_visit.DrawOnMap(formatted_timestamp)
+                    skier_visit.CreateCsvFiles("./DVO")
+                else:
+                    pass
+
+                if list_of_tracks is not None:
+                    for track_tuple in list_of_tracks:
+                        end_to_end_length = distance_start_and_end(track_tuple[1])
+                        adjusted_list_of_points = remove_excluded_points(track_tuple[1], exclude_boxes, args.showrejections >= 1)
+                        polyline = folium.PolyLine(adjusted_list_of_points,
+                                                   **the_args_dict,
+                                                   tooltip=the_label,
+                                                   # Tried lots of variations - but couldn't get the className stuff to pass information into the generated .html file
+                                                   dash_array="class_" + formatted_timestamp,
+                                                   # This is a kluge - apparently folium doesn't support class_name="..." (documentation
+                                                   # implies it should), so I'm picking a little-used attribute (dashArray) that is supported and hijacking it.
+                                                   # Relying on a post-processing step in the generated .html file to change the generated "dashArray" to the desired "className"
+                                                   # There's another near-identical kluge elsewhere in this file.
+                                                   popup=create_track_popup(track_tuple[2], end_to_end_length, the_label,file_part, "", formatted_timestamp)
+                                                   )
+                        OverallBBoxCheck_GPX( track_tuple[2].get_bounds() )
+                        polyline.add_to(tracking_group)
         tracking_group.add_to(folium_map)
         profiler.end()
     the_profiler.profile("Processed all GPX files and marked routes on map")
+
+    args_to_poly(args.polygon, folium.Polygon)
+    the_profiler.profile("Polygons")
+
+
+
+    args_to_poly(args.fixed, folium.PolyLine)
+    the_profiler.profile("Fixed Routes")
 
     if (args.showbbox > 0) and ((args.include is not None) or (args.exclude is not None)):
         bbox_group = folium.FeatureGroup("Bounding Boxes", control=True, show=(args.showbbox == 1))
@@ -1358,7 +2174,8 @@ if __name__ == "__main__":
     for timestamp in sorted(DateTimeCheckboxMgr.datestamps_to_imagefiles):
         the_big_string += 'var ImageArray_{} = [\n'.format( timestamp )
         for fname in sorted(DateTimeCheckboxMgr.datestamps_to_imagefiles[ timestamp ]):
-            the_big_string += '\t"{}",\n'.format( fname )
+            #the_big_string += '\t"{}",\n'.format( fname )
+            the_big_string += '\t"{}",\n'.format( os.path.basename(fname) )
         the_big_string += "\t];\n"
 
 
@@ -1394,7 +2211,7 @@ if __name__ == "__main__":
 	<script>
         ////////////////////////////////
 
-        const slideshow_url = 'https://kokanee.mynetgear.com/dvo/slideshow.html';
+        const slideshow_url = '{}';
         const check_all = "Check All";
         const uncheck_all = "Uncheck All";
         const ds_btn = document.getElementById("datestamp_button");
@@ -1457,6 +2274,15 @@ if __name__ == "__main__":
 
         {}
 
+        function createSlideShowURL(the_urls_array) {{
+            var width_array = [ 160, 240, 320, 480, 640, 960, 1280, 1920 ];
+            var the_location_href = slideshow_url +
+                            '?pace=' + encodeURIComponent( "{}" ) + \
+                            '&prefix=' + encodeURIComponent( "{}" ) + \
+                            '&sendwidth=' + encodeURIComponent( JSON.stringify( width_array ) ) + \
+                            '&image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ) );
+            return the_location_href;
+        }}
         const slideshow_button = document.getElementById("datestamp_slideshow_button");
         slideshow_button.addEventListener('click', () => {{
                 form = document.getElementById('date_menu_form_id');
@@ -1471,18 +2297,18 @@ if __name__ == "__main__":
                         }}
                     }}
                 }});
-            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
+            var the_location_href = createSlideShowURL(the_urls_array);
             window.open( the_location_href, '_blank' );
             return false;
         }});
         function toSlideShow(classname) {{
             const the_urls_array = window['ImageArray_' + classname];
-            var the_location_href = slideshow_url + '?image_files=' + encodeURIComponent( JSON.stringify( the_urls_array ));
+            var the_location_href = createSlideShowURL(the_urls_array);
             window.open( the_location_href, '_blank' );
         }}
 
 	</script>
-    """.format(checkboxes, the_big_string)))
+    """.format(checkboxes, args.slideshow, the_big_string, args.ss_pace, args.ss_url_prefix)))
 
     if args.css_url is not None:
         for pair in args.css_url:
