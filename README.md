@@ -44,6 +44,13 @@ The additional information in the **-tracks** and **-photos** command-line argum
 
 **Note**: The **sed** command above is part of a work-around to a possible bug in the underlying **folium** python package. I'm still investigating.
 
+## Required packages
+folium
+gpxpy
+exif
+shapely
+
+
 ## Help
 
 If the command-line arguments include **-h**, then a help message is printed and the script terminates.
