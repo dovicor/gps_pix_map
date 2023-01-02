@@ -847,22 +847,22 @@ def correct_EXIF_GPS_coordinates(jpeg_df, calculate_gps_corrections, cache_file)
     return jpeg_df, corrected_count
 
 
-class LiftHelper:
-    def __init__(self, name, the_args):
-        self.name = name
-        self.the_args_dict = string_to_dict(the_args)
-        self.feature_group = folium.FeatureGroup(name, overlay=True)
-        self.feature_group.add_to(folium_map)
-
-    def AddSkiLift(self, liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon):
-        if (not math.isnan(turn_lat)) and (turn_lat != lower_lat) and (not math.isnan(turn_lon) ) and (turn_lon != lower_lon): # Ala Vista T-bar at Kirkwood
-            folium.PolyLine([(lower_lat, lower_lon), (turn_lat, turn_lon), (upper_lat, upper_lon)],
-                        **self.the_args_dict
-                        ).add_to(self.feature_group)
-        else:
-            folium.PolyLine([(lower_lat, lower_lon), (upper_lat, upper_lon)],
-                        **self.the_args_dict
-                        ).add_to(self.feature_group)
+#class LiftHelper:
+#    def __init__(self, name, the_args):
+#        self.name = name
+#        self.the_args_dict = string_to_dict(the_args)
+#        self.feature_group = folium.FeatureGroup(name, overlay=True)
+#        self.feature_group.add_to(folium_map)
+#
+#    def AddSkiLift(self, liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon):
+#        if (not math.isnan(turn_lat)) and (turn_lat != lower_lat) and (not math.isnan(turn_lon) ) and (turn_lon != lower_lon): # Ala Vista T-bar at Kirkwood
+#            folium.PolyLine([(lower_lat, lower_lon), (turn_lat, turn_lon), (upper_lat, upper_lon)],
+#                        **self.the_args_dict
+#                        ).add_to(self.feature_group)
+#        else:
+#            folium.PolyLine([(lower_lat, lower_lon), (upper_lat, upper_lon)],
+#                        **self.the_args_dict
+#                        ).add_to(self.feature_group)
 
 
 def meters_to_feet(meters):
@@ -1530,7 +1530,6 @@ class SkierVisit:
                                                     [{"color": "pink", "weight": 2, "opacity": 0.8},
                                                      {"color": "teal", "weight": 2, "opacity": 0.8},
                                                      {"color": "orange", "weight": 2, "opacity": 0.8 } ]  ):
-            #print("QQQQQ feature_name={}".format(feature_name))
             if df is not None:
                 tracking_group = folium.FeatureGroup(feature_name, control=True, show=True)
                 tracking_group.add_to(folium_map)
@@ -2049,6 +2048,7 @@ if __name__ == "__main__":
             ski_area = SkiArea.lookup_create(the_ski_area_name)
             if os.path.isfile(filename):
                 try:
+                    print("Calling lifts_read_csv({},...) from line 2055 in main sequece".format(filename))
                     lifts_df = ski_area.lifts_read_csv(filename, the_args)
                 except IOError as ee:
                     print("ERROR: error while attempting to read {}: {}".format(filename, ee))
@@ -2056,19 +2056,20 @@ if __name__ == "__main__":
             else:
                 print("ERROR: File not found: {}".format(filename))
                 exit(1)
-            lifts = LiftHelper(feature_name, the_args)
-            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon) \
-             for liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon in zip(
-                lifts_df['Lift'],
-                lifts_df['EmbarkTermLat'], lifts_df['EmbarkTermLon'],
-                lifts_df['DisembarkTermLat'], lifts_df['DisembarkTermLon'],
-                # TODO - reconsider implementation of the following line. The TurnLat and TurnLon columns are optional
-                # in the DataFrame. So I'd like to return the value in that column if it exists, but return NaN otherwise.
-                # But I couldn't figure out how to do that. Note that nan is returned for empty cells.
-                lifts_df['TurnLat'] if 'TurnLat' in lifts_df.columns else lifts_df['EmbarkTermLat'], lifts_df['TurnLon'] if 'TurnLon' in lifts_df.columns else lifts_df['EmbarkTermLon']
-                )
-             ]
-    the_profiler.profile("Lifts")
+            if False: # The stuff below is now done in ski_area.lifts_read_csv()?
+                lifts = LiftHelper(feature_name, the_args)
+                [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon) \
+                 for liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon in zip(
+                    lifts_df['Lift'],
+                    lifts_df['EmbarkTermLat'], lifts_df['EmbarkTermLon'],
+                    lifts_df['DisembarkTermLat'], lifts_df['DisembarkTermLon'],
+                    # TODO - reconsider implementation of the following line. The TurnLat and TurnLon columns are optional
+                    # in the DataFrame. So I'd like to return the value in that column if it exists, but return NaN otherwise.
+                    # But I couldn't figure out how to do that. Note that nan is returned for empty cells.
+                    lifts_df['TurnLat'] if 'TurnLat' in lifts_df.columns else lifts_df['EmbarkTermLat'], lifts_df['TurnLon'] if 'TurnLon' in lifts_df.columns else lifts_df['EmbarkTermLon']
+                    )
+                 ]
+    the_profiler.profile("SkiLifts")
 
     if args.skiruns is not None:
         for the_tuple in args.skiruns:
@@ -2081,9 +2082,9 @@ if __name__ == "__main__":
     all_tracks = args.tracks if (args.tracks is not None) else [] + args.skitracks if (args.skitracks is not None) else []
     for the_tuple in all_tracks:
         pathname = the_tuple[0] if (len(the_tuple) >= 1) and (the_tuple[0] is not None) else ""
-        feature_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else ""
-        the_args_string = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
-        refering_to = the_tuple[3] if (len(the_tuple) >= 4) and (the_tuple[3] is not None) else ""
+        refering_to = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else ""
+        feature_name = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
+        the_args_string = the_tuple[3] if (len(the_tuple) >= 4) and (the_tuple[3] is not None) else ""
         profiler = SimpleHierProfiler("Loop to read/process GPX for {}".format(pathname))
         the_args_dict = string_to_dict(the_args_string)
         file_list = [os.path.join(pathname, f) for f in sorted(os.listdir(pathname), reverse=True)] if os.path.isdir(
@@ -2135,35 +2136,6 @@ if __name__ == "__main__":
 
     args_to_poly(args.polygon, folium.Polygon)
     the_profiler.profile("Polygons")
-
-
-    if args.lifts is not None:
-        for the_tuple in args.lifts:
-            filename = the_tuple[0]
-            the_name = the_tuple[1] if (len(the_tuple) >= 2) and (the_tuple[1] is not None) else "lifts"
-            the_args = the_tuple[2] if (len(the_tuple) >= 3) and (the_tuple[2] is not None) else ""
-            if os.path.isfile(filename):
-                try:
-                    lifts_df = pd.read_csv(filename)
-                except IOError as ee:
-                    print("ERROR: error while attempting to read {}: {}".format(filename, ee))
-                    exit(1)
-            else:
-                print("ERROR: File not found: {}".format(filename))
-                exit(1)
-            lifts = LiftHelper(the_name, the_args)
-            [lifts.AddSkiLift(liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon) \
-             for liftname, lower_lat, lower_lon, upper_lat, upper_lon, turn_lat, turn_lon in zip(
-                lifts_df['Lift'],
-                lifts_df['LowerTermLat'], lifts_df['LowerTermLon'],
-                lifts_df['UpperTermLat'], lifts_df['UpperTermLon'],
-                # TODO - reconsider implementation of the following line. The TurnLat and TurnLon columns are optional
-                # in the DataFrame. So I'd like to return the value in that column if it exists, but return NaN otherwise.
-                # But I couldn't figure out how to do that. Note that nan is returned for empty cells.
-                lifts_df['TurnLat'] if 'TurnLat' in lifts_df.columns else lifts_df['LowerTermLat'], lifts_df['TurnLon'] if 'TurnLon' in lifts_df.columns else lifts_df['LowerTermLon']
-                )
-             ]
-    the_profiler.profile("Lifts")
 
 
     args_to_poly(args.fixed, folium.PolyLine)
